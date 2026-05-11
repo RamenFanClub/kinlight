@@ -30,7 +30,7 @@ Planned platforms:
 
 - **GitHub:** `https://github.com/RamenFanClub/emergency-exit`
 - **GitHub Pages:** `https://ramenfanclub.github.io/emergency-exit` (public prototype, no login)
-- **Testing URL:** `http://34.40.222.5` (login-walled, connects to real backend)
+- **Testing URL:** `http://34.40.251.204` (login-walled, connects to real backend)
 - **Deployment:** Push to `main` branch → GitHub Pages serves from `/ (root)` → live in ~60 seconds
 - **Key files:**
   - `index.html` — the entire frontend app (root, served by GitHub Pages and Caddy on VM)
@@ -66,6 +66,8 @@ cd ~/Github/emergency-exit  # if repo is cloned on VM
 curl -o /var/www/html/index.html https://raw.githubusercontent.com/RamenFanClub/emergency-exit/main/index.html
 ```
 
+**⚠️ IP address warning:** The VM's external IP has changed once already (was `34.40.222.5`, now `34.40.251.204`). If the app stops working, SSH into the VM and run `curl ifconfig.me` to get the current IP, then update: (1) `API` constant in both `index.html` files, (2) MongoDB Atlas Network Access whitelist, (3) this CLAUDE.md file.
+
 **Note:** The repo is private so curl from GitHub won't work without a token. Use `gcloud compute scp` instead:
 ```bash
 # From Cloud Shell (not inside VM):
@@ -83,7 +85,7 @@ gcloud compute scp ~/index_updated.html emergency-exit-server:/var/www/html/inde
 - **Zone:** `australia-southeast1-a` (Sydney)
 - **Machine type:** `e2-micro` (free tier)
 - **OS:** Ubuntu 22.04 LTS
-- **External IP:** `34.40.222.5` (static — note: may change if VM is stopped/restarted)
+- **External IP:** `34.40.251.204` (note: this IP has changed once already — verify with `curl ifconfig.me` on the VM if the service stops responding)
 - **Internal IP:** `10.152.0.2`
 
 ### Accessing the VM
@@ -122,6 +124,13 @@ sudo systemctl status identity-service
 
 ## Identity Service — Python FastAPI
 
+### ⚠️ Important — two versions of the identity service exist
+
+- **On the VM** (`~/emergency-exit/identity-service/main.py`) — this is the REAL working version. All edits happen here.
+- **In the GitHub repo** (`identity-service/app/`) — this is an older skeleton that is NOT what runs on the VM. Ignore it for now.
+
+When editing the backend, always SSH into the VM and edit the file there directly.
+
 ### Location on VM
 ```
 /home/anggita_bayu_gmail_com/emergency-exit/identity-service/
@@ -147,6 +156,8 @@ uvicorn main:app --host 0.0.0.0 --port 8001
 | POST | `/auth/login` | No | Login with username + password, returns JWT token |
 | GET | `/auth/me` | Yes | Get current user's profile |
 | GET | `/admin/testers` | Yes | List all tester accounts |
+| POST | `/vault/sync` | Yes | Store full ee_v3 vault blob in MongoDB (F39) |
+| POST | `/checkin` | Yes | Record check-in server-side, clear overdue flag (F39) |
 
 ### Environment Variables (.env)
 ```
@@ -175,7 +186,7 @@ Passwords are printed once and cannot be recovered — copy them immediately.
 - **Username:** `dba_emex`
 - **Collections:**
   - `users` — tester accounts (username, hashed password, name, ageGroup, hasWill, notes, isTester, createdAt, lastLogin)
-- **Network access:** VM IP whitelisted in Atlas → Network Access
+  - `vaults` — synced vault blobs per user (userId, vault, syncedAt, lastCheckin, checkInFrequency, checkInUnit, gracePeriodDays, notifyProto, contactCount, overdueNotificationSent)
 
 ### Checking tester accounts in Atlas:
 Go to [cloud.mongodb.com](https://cloud.mongodb.com) → Browse Collections → `emergency_exit` → `users`
@@ -259,6 +270,7 @@ The `index.html` served at `http://34.40.222.5` includes a login wall:
 - **Login wall** added for user testing — username + password, no email required
 - **sessionStorage** for auth token (clears on tab close)
 - **localStorage** still used for vault data (will migrate to MongoDB in next phase)
+- **Vault sync** (F39 Step 1): every `save()` call silently POSTs vault to `/vault/sync` — server now has a copy
 - jsPDF (via CDN) for client-side PDF generation
 - **Frontend:** Caddy serving from `/var/www/html/` on Google Cloud VM
 - **Backend:** Python FastAPI (`identity-service`) on same VM
@@ -385,6 +397,7 @@ Active tab: white icon/label on navy pill. Inactive: navy at 35% opacity.
 ```javascript
 // localStorage key: 'ee_v3'
 // NOTE: vault data still in localStorage for now — migration to MongoDB planned
+// F39 Step 1: vault is also synced to MongoDB `vaults` collection on every save()
 {
   assets: [{
     id: timestamp, name: string, category: string,
@@ -424,6 +437,22 @@ Active tab: white icon/label on navy pill. Inactive: navy at 35% opacity.
 }
 ```
 
+### MongoDB `vaults` collection schema (F39)
+```
+{
+  userId: ObjectId,         // links to users collection
+  vault: object,            // full ee_v3 blob
+  syncedAt: Date,           // last sync timestamp
+  lastCheckin: number,      // ms timestamp — top-level for pulse service queries
+  checkInFrequency: number, // fc value
+  checkInUnit: string,      // 'weeks' | 'months'
+  gracePeriodDays: number,  // gp value
+  notifyProto: string,      // notification protocol
+  contactCount: number,     // number of contacts
+  overdueNotificationSent: boolean  // set true when notifications fire, false on check-in
+}
+```
+
 ---
 
 ## Completeness Score — 7 Checks (~14.3% each)
@@ -449,8 +478,9 @@ Active tab: white icon/label on navy pill. Inactive: navy at 35% opacity.
 - Home screen uses `id="s-home"` and nav uses `id="n-home"`
 - When editing index.html, always update BOTH `./index.html` AND `./frontend/index.html`
 - jsPDF loaded via CDN in `<head>`
-- `API` constant in JS points to `http://34.40.222.5:8001`
+- `API` constant in JS points to `http://34.40.251.204:8001`
 - Login token stored in `sessionStorage` (not localStorage — clears on tab close)
+- Vault sync is silent — never show errors to the user if sync fails
 
 ---
 
@@ -467,6 +497,7 @@ Active tab: white icon/label on navy pill. Inactive: navy at 35% opacity.
 - Do not remove login wall element IDs (`#login-wall`, `#li-user`, `#li-pass`, `#login-err`, `#logout-btn`, `#user-greeting`)
 - Do not hardcode the MongoDB password anywhere in committed files
 - Do not commit the `.env` file
+- Do not show vault sync errors to the user — fail silently
 
 ---
 
@@ -480,7 +511,7 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 
 | ID | User Story | Priority | Status | Notes |
 |----|-----------|----------|--------|-------|
-| F01 | Automatically notify contacts if check-in missed and grace period expires | Must | in-progress | Client-side simulation done. Backend delivery not started — requires F39. |
+| F01 | Automatically notify contacts if check-in missed and grace period expires | Must | in-progress | Client-side simulation done. Backend delivery pending F39 sub-tasks. |
 | F02 | Self-contained PDF package for contacts | Must | done | 6-page A4 PDF, generated client-side via jsPDF. |
 | F03 | Personal letter for each contact included in notification | Must | done | Letter stored as `k.letter`. Status pill on contact card. |
 | F04 | Data encrypted at rest and in transit | Must | idea | Prototype uses plain localStorage. Production needs AES-256. |
@@ -500,7 +531,7 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 | F19 | Passive liveness detection via phone activity | Should | idea | Requires native mobile APIs. |
 | F20 | Minimum information capture design | Should | idea | |
 | F21 | Document location recording (not upload) | Should | idea | Partially done via suppDocs location field. |
-| F41 | Migrate vault data from localStorage to MongoDB | Should | idea | Next phase after user testing. |
+| F41 | Migrate vault data from localStorage to MongoDB | Should | in-progress | Step 1 done via F39 vault sync. Full migration pending. |
 
 ### Could Have
 
@@ -539,7 +570,16 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 
 | ID | User Story | Priority | Status | Notes |
 |----|-----------|----------|--------|-------|
-| F39 | Server-side notification system | Must | specified | Backend counterpart to F01. See detailed spec in original CLAUDE.md. |
+| F39 | Server-side notification system | Must | in-progress | See sub-tasks below. |
+| F39-1 | Vault sync endpoint + frontend sync on save() | Must | done | POST /vault/sync and POST /checkin live on VM. save() and checkin() call them silently. IP updated to 34.40.251.204. MongoDB Atlas whitelist updated. |
+| F39-2 | Pulse service — scheduled overdue scanner | Must | specified | Runs hourly. Queries vaults collection for overdue users. Publishes user.overdue event. |
+| F39-3 | SendGrid email delivery (plain text first) | Must | specified | Notification worker sends email to each contact. No PDF attachment yet. |
+| F39-4 | Server-side PDF generation | Must | specified | Python WeasyPrint or ReportLab. Attaches PDF to email. |
+| F39-5 | Twilio SMS delivery | Should | specified | SMS with PDF link (not attachment). Requires GCS for PDF hosting. |
+| F39-6 | RabbitMQ event bus | Should | specified | Introduces retry resilience. Can skip initially and have pulse call worker directly. |
+| F39-7 | Notification protocol logic server-side | Must | specified | Honour ping_then_notify / notify_immediately / escalate on the server. |
+| F39-8 | False alarm recovery — cancellation logic | Must | specified | user.checked_in event cancels queued notifications. overdueNotificationSent flag. |
+| F39-9 | WhatsApp delivery via Twilio | Could | idea | Requires Meta Business API approval. Defer until core delivery is stable. |
 | F40 | Identity service + tester provisioning | Must | done | Python FastAPI on Google Cloud VM. MongoDB Atlas. 6 testers created. |
 
 ### Bug Fix
@@ -565,10 +605,12 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 - [ ] Download the new `CLAUDE.md`
 - [ ] Did anything structural change? Update `CLAUDE.md`
 - [ ] Replace files in VS Code (`./index.html` AND `./frontend/index.html`)
+- [ ] If the VM IP has changed: update `API` constant in both index.html files, update MongoDB Atlas whitelist, update this CLAUDE.md
+- [ ] Apply backend patch: add vault sync routes to `identity-service/main.py` ON THE VM (not the local repo)
 - [ ] `git add -A`
 - [ ] `git commit -m "describe what changed"`
 - [ ] `git push`
-- [ ] If backend changed: SSH into VM and restart identity-service
+- [ ] SSH into VM, pull latest, restart identity-service:
   ```bash
   sudo systemctl restart identity-service
   sudo systemctl status identity-service
