@@ -30,7 +30,9 @@ Planned platforms:
 
 - **GitHub:** `https://github.com/RamenFanClub/emergency-exit`
 - **GitHub Pages:** `https://ramenfanclub.github.io/emergency-exit` (public prototype, no login)
-- **Testing URL:** `http://34.40.251.204` (login-walled, connects to real backend)
+- **Frontend URL:** `https://ramenfanclub.github.io/emergency-exit` (GitHub Pages — auto-deploys on git push)
+- **Backend API URL:** `https://emergency-exit-production.up.railway.app` (Railway — auto-deploys on git push)
+- **VM:** No longer used for hosting — can be shut down to stop charges
 - **Deployment:** Push to `main` branch → GitHub Pages serves from `/ (root)` → live in ~60 seconds
 - **Key files:**
   - `index.html` — the entire frontend app (root, served by GitHub Pages and Caddy on VM)
@@ -267,14 +269,14 @@ The `index.html` served at `http://34.40.222.5` includes a login wall:
 
 ### Current (user testing)
 - Single-file HTML/CSS/JavaScript (`index.html`)
-- **Login wall** added for user testing — username + password, no email required
-- **sessionStorage** for auth token (clears on tab close)
+- **Login wall** — username + password, JWT token in sessionStorage
 - **localStorage** still used for vault data (will migrate to MongoDB in next phase)
 - **Vault sync** (F39 Step 1): every `save()` call silently POSTs vault to `/vault/sync` — server now has a copy
 - jsPDF (via CDN) for client-side PDF generation
-- **Frontend:** Caddy serving from `/var/www/html/` on Google Cloud VM
-- **Backend:** Python FastAPI (`identity-service`) on same VM
+- **Frontend:** GitHub Pages (`ramenfanclub.github.io/emergency-exit`) — auto-deploys on `git push`
+- **Backend:** Railway (`emergency-exit-production.up.railway.app`) — auto-deploys on `git push`
 - **Database:** MongoDB Atlas on Google Cloud
+- **VM:** Google Cloud e2-micro — no longer used for hosting, can be shut down
 
 ### Planned (production)
 - **Frontend:** React Native (iOS + Android) + React (web)
@@ -478,7 +480,7 @@ Active tab: white icon/label on navy pill. Inactive: navy at 35% opacity.
 - Home screen uses `id="s-home"` and nav uses `id="n-home"`
 - When editing index.html, always update BOTH `./index.html` AND `./frontend/index.html`
 - jsPDF loaded via CDN in `<head>`
-- `API` constant in JS points to `http://34.40.251.204:8001`
+- `API` constant in JS points to `https://emergency-exit-production.up.railway.app`
 - Login token stored in `sessionStorage` (not localStorage — clears on tab close)
 - Vault sync is silent — never show errors to the user if sync fails
 
