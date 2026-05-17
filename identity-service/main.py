@@ -149,6 +149,43 @@ This is an automated message. Do not reply to this email.
         return False
 
 
+
+# ─── F39-8: ALL CLEAR EMAIL ───────────────────────────────────────────────────
+def send_allclear_email(vault_owner_name: str, contact: dict):
+    """
+    Sends a warm all-clear email to a contact after the vault holder checks in
+    following an overdue notification. Reassures them that everything is okay.
+    """
+    contact_name = f"{contact.get('first', '')} {contact.get('last', '')}".strip()
+
+    body = f"""Dear {contact_name},
+
+This is a follow-up message from Emergency Exit.
+
+Good news — {vault_owner_name} has just checked in and confirmed they are safe and well.
+
+No further action is required on your part. You can disregard the earlier notification.
+
+Thank you for being a trusted contact for {vault_owner_name}.
+
+---
+Emergency Exit — Digital Legacy Vault
+This is an automated message. Do not reply to this email.
+"""
+
+    try:
+        resend.Emails.send({
+            "from": "onboarding@resend.dev",
+            "to": TEST_INBOX,  # ← swap to contact["email"] when going live
+            "subject": f"[Emergency Exit] All clear — {vault_owner_name} has checked in and is safe",
+            "text": body,
+        })
+        print(f"✅ All-clear email sent for contact: {contact_name}")
+        return True
+    except Exception as e:
+        print(f"❌ All-clear email failed for contact {contact_name}: {e}")
+        return False
+
 # ─── F39-7: NOTIFICATION PROTOCOL LOGIC ──────────────────────────────────────
 def get_contacts_to_notify(vault_doc: dict, days_overdue: int) -> list:
     """
@@ -332,17 +369,47 @@ def sync_vault(body: VaultSyncRequest, current_user: dict = Depends(get_current_
 
 @app.post("/checkin")
 def record_checkin(current_user: dict = Depends(get_current_user)):
-    """Records a check-in server-side and clears the overdue flag."""
+    """
+    Records a check-in server-side and clears the overdue flag.
+    F39-8: If contacts were already notified, sends an all-clear email to each one.
+    """
     now = datetime.utcnow()
+    user_id = current_user["sub"]
+
+    # ── F39-8: Check if contacts were already notified before resetting ───────
+    vault_doc = vaults.find_one({"userId": user_id})
+    was_overdue_and_notified = vault_doc and vault_doc.get("overdueNotificationSent", False)
+
+    # ── Reset the vault back to normal ────────────────────────────────────────
     vaults.update_one(
-        {"userId": current_user["sub"]},
+        {"userId": user_id},
         {"$set": {
             "lastCheckin": int(now.timestamp() * 1000),
             "syncedAt": now,
             "overdueNotificationSent": False,
         }}
     )
-    return {"status": "checked_in", "timestamp": int(now.timestamp() * 1000)}
+
+    # ── F39-8: Send all-clear emails if contacts were previously notified ─────
+    if was_overdue_and_notified:
+        print(f"🟢 User {user_id} checked in after overdue — sending all-clear emails")
+        user_record = users.find_one({"_id": ObjectId(user_id)})
+        owner_name = user_record["name"] if user_record else "The vault holder"
+        contacts = vault_doc.get("vault", {}).get("kin", [])
+        sent_count = 0
+        for contact in contacts:
+            success = send_allclear_email(owner_name, contact)
+            if success:
+                sent_count += 1
+        print(f"🟢 All-clear sent to {sent_count}/{len(contacts)} contact(s)")
+        return {
+            "status": "checked_in",
+            "timestamp": int(now.timestamp() * 1000),
+            "allclear_sent": True,
+            "allclear_count": sent_count
+        }
+
+    return {"status": "checked_in", "timestamp": int(now.timestamp() * 1000), "allclear_sent": False}
 
 # ─── F39: MANUAL TRIGGER — for testing the pulse scan without waiting an hour ─
 @app.post("/admin/trigger-pulse")
