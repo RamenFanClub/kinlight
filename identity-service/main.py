@@ -355,6 +355,29 @@ def trigger_pulse(current_user: dict = Depends(get_current_user)):
     run_pulse_scan()
     return {"status": "pulse scan triggered", "timestamp": datetime.utcnow().isoformat()}
 
+# ─── F39: FORCE OVERDUE — sets your vault into overdue state for testing ──────
+@app.post("/admin/force-overdue")
+def force_overdue(current_user: dict = Depends(get_current_user)):
+    """
+    Sets the current user's lastCheckin to a date far in the past,
+    making them appear overdue to the pulse scanner.
+    Only use for testing. Hit /checkin afterwards to reset.
+    """
+    # Set lastCheckin to January 1, 2020 — guaranteed to be overdue
+    fake_checkin_ms = int(datetime(2020, 1, 1).timestamp() * 1000)
+    vaults.update_one(
+        {"userId": current_user["sub"]},
+        {"$set": {
+            "lastCheckin": fake_checkin_ms,
+            "overdueNotificationSent": False,  # reset so scanner won't skip it
+        }}
+    )
+    return {
+        "status": "vault set to overdue",
+        "lastCheckin": "2020-01-01 (fake)",
+        "next_step": "POST /admin/trigger-pulse to run the scanner now"
+    }
+
 @app.on_event("startup")
 def startup():
     print("✅ Connected to MongoDB")
