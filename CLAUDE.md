@@ -89,12 +89,14 @@ The `index.html` includes a login wall:
 - Single-file HTML/CSS/JavaScript (`index.html`)
 - **Login wall** — username + password, JWT token in sessionStorage
 - **localStorage** still used for vault data (will migrate to MongoDB in next phase)
-- **Vault sync** (F39 Step 1): every `save()` call silently POSTs vault to `/vault/sync` — server now has a copy
+- **Vault sync** (F39-1): every `save()` call silently POSTs vault to `/vault/sync` — server has a copy
+- **Pulse scanner** (F39-2): APScheduler runs `run_pulse_scan()` every hour inside the FastAPI app
+- **Email delivery** (F39-3): Resend sends plain-text notification emails to contacts when overdue detected
 - jsPDF (via CDN) for client-side PDF generation
 - **Frontend:** GitHub Pages (`ramenfanclub.github.io/emergency-exit`) — auto-deploys on `git push`
 - **Backend:** Railway (`emergency-exit-production.up.railway.app`) — auto-deploys on `git push`
 - **Database:** MongoDB Atlas on Google Cloud
-- **VM:** Google Cloud e2-micro — no longer used for hosting, can be shut down
+- **Email provider:** Resend (`resend.com`) — free tier, 100 emails/day
 - **CI:** GitHub Actions — `.github/workflows/ci.yml` runs a sync check between `./index.html` and `./frontend/index.html` on every push to `main`
 
 ### Planned (production)
@@ -102,7 +104,7 @@ The `index.html` includes a login wall:
 - **Backend:** Python FastAPI microservices
 - **Database:** MongoDB (one DB per service)
 - **Message broker:** RabbitMQ (domain events between services)
-- **Notifications:** Email (SendGrid), SMS (Twilio), WhatsApp, push
+- **Notifications:** Email (Resend/SendGrid), SMS (Twilio), WhatsApp, push
 - **Auth:** Biometric (Face ID / Touch ID), PIN, JWT + MFA
 - **Login:** Email + password OR Google login (replacing username-only testing auth)
 
@@ -112,11 +114,13 @@ The `index.html` includes a login wall:
 
 - **GitHub Pages** auto-deploys on every push to `main` — CD is already live
 - **GitHub Actions** (`.github/workflows/ci.yml`) — runs a sync check to ensure `./index.html` and `./frontend/index.html` are identical before deploy
+- **Railway** auto-deploys backend on every push to `main`
 - **Developer workflow:**
   1. Edit `./index.html` in VSCode
   2. Run `cp index.html frontend/index.html` in terminal
   3. `git add -A && git commit -m "..." && git push`
   4. GitHub Actions runs sync check ✅ → Pages deploys automatically 🚀
+  5. Railway picks up backend changes and redeploys automatically 🚀
 
 ---
 
@@ -206,7 +210,28 @@ Active tab: linen cream icon/label on charcoal pill. Inactive: charcoal at 35% o
 
 ## Backend (Identity Service on Railway)
 
-The backend is now on Railway (`emergency-exit-production.up.railway.app`), NOT the VM.
+The backend is on Railway (`emergency-exit-production.up.railway.app`), NOT the VM. The Google Cloud VM (`e2-micro`) is no longer used and can be shut down.
+
+### identity-service/main.py structure
+```
+- CORS middleware
+- MongoDB connection (users + vaults collections)
+- Resend API key loaded from environment variable RESEND_API_KEY
+- APScheduler — runs run_pulse_scan() every hour
+- JWT auth helpers
+- send_notification_email() — sends plain-text email via Resend
+- get_contacts_to_notify() — protocol logic (ping_then_notify / notify_immediately / escalate)
+- run_pulse_scan() — hourly scanner, detects overdue vaults, triggers emails
+- All API routes
+```
+
+### Key implementation notes
+- `bson` must NOT be in `requirements.txt` — pymongo bundles its own bson. Adding it separately causes an `ImportError: cannot import name 'SON'` crash.
+- `from bson import ObjectId` works because pymongo's bson is available after pymongo is installed.
+- Test inbox is hardcoded as `buat.nonton8282@gmail.com` — swap to `contact["email"]` when going live.
+- Emails send from `onboarding@resend.dev` (Resend sandbox) — verify a custom domain before going live.
+- `overdueNotificationSent` flag in MongoDB prevents re-sending emails every hour for the same overdue event.
+- For `escalate` protocol, `overdueNotificationSent` is NOT set to True — scanner keeps running to notify new contacts each day.
 
 ### API Endpoints
 | Method | Endpoint | Auth required | Purpose |
@@ -215,14 +240,26 @@ The backend is now on Railway (`emergency-exit-production.up.railway.app`), NOT 
 | POST | `/auth/login` | No | Login with username + password, returns JWT token |
 | GET | `/auth/me` | Yes | Get current user's profile |
 | GET | `/admin/testers` | Yes | List all tester accounts |
-| POST | `/vault/sync` | Yes | Store full ee_v3 vault blob in MongoDB (F39) |
-| POST | `/checkin` | Yes | Record check-in server-side, clear overdue flag (F39) |
+| POST | `/vault/sync` | Yes | Store full ee_v3 vault blob in MongoDB |
+| POST | `/checkin` | Yes | Record check-in server-side, clear overdue flag |
+| POST | `/admin/trigger-pulse` | Yes | Manually trigger the pulse scan immediately (testing) |
+| POST | `/admin/force-overdue` | Yes | Set vault lastCheckin to 2020 to simulate overdue state (testing) |
 
-### Environment Variables
+### Environment Variables (set in Railway dashboard, never committed)
+```
+MONGO_URI=mongodb+srv://...
+JWT_SECRET=...
+RESEND_API_KEY=re_...
 ```
 
-```
-**Never commit the .env file.**
+### Testing the pulse scanner end-to-end
+1. Go to `https://emergency-exit-production.up.railway.app/docs`
+2. Login via `POST /auth/login` → copy the token
+3. Click Authorize (top right) → paste `Bearer <token>` → Authorize
+4. `POST /admin/force-overdue` — sets vault to overdue
+5. `POST /admin/trigger-pulse` — runs scanner immediately
+6. Check test inbox for email
+7. `POST /checkin` — resets vault back to normal
 
 ---
 
@@ -245,6 +282,12 @@ The backend is now on Railway (`emergency-exit-production.up.railway.app`), NOT 
   log: [{ msg, time }],
   saveCount: number
 }
+```
+
+### MongoDB vaults collection fields (server-side)
+```
+userId, vault (full blob), syncedAt, lastCheckin, checkInFrequency,
+checkInUnit, gracePeriodDays, notifyProto, contactCount, overdueNotificationSent
 ```
 
 ---
@@ -293,6 +336,7 @@ The backend is now on Railway (`emergency-exit-production.up.railway.app`), NOT 
 - Do not hardcode the MongoDB password anywhere in committed files
 - Do not commit the `.env` file
 - Do not show vault sync errors to the user — fail silently
+- Do not add `bson` to `requirements.txt` — pymongo bundles its own bson and they conflict
 
 ---
 
@@ -306,7 +350,7 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 
 | ID | User Story | Priority | Status | Notes |
 |----|-----------|----------|--------|-------|
-| F01 | Automatically notify contacts if check-in missed and grace period expires | Must | in-progress | Client-side simulation done. Backend delivery pending F39 sub-tasks. |
+| F01 | Automatically notify contacts if check-in missed and grace period expires | Must | in-progress | Client-side simulation done. Real email delivery live (F39-2, F39-3). PDF attachment pending F39-4. |
 | F02 | Self-contained PDF package for contacts | Must | done | 6-page A4 PDF, generated client-side via jsPDF. |
 | F03 | Personal letter for each contact included in notification | Must | done | Letter stored as `k.letter`. Status pill on contact card. |
 | F04 | Data encrypted at rest and in transit | Must | idea | Prototype uses plain localStorage. Production needs AES-256. |
@@ -369,14 +413,14 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 |----|-----------|----------|--------|-------|
 | F39 | Server-side notification system | Must | in-progress | See sub-tasks below. |
 | F39-1 | Vault sync endpoint + frontend sync on save() | Must | done | POST /vault/sync and POST /checkin live on Railway. |
-| F39-2 | Pulse service — scheduled overdue scanner | Must | specified | Runs hourly. Queries vaults collection for overdue users. |
-| F39-3 | SendGrid email delivery (plain text first) | Must | specified | |
-| F39-4 | Server-side PDF generation | Must | specified | Python WeasyPrint or ReportLab. |
-| F39-5 | Twilio SMS delivery | Should | specified | |
-| F39-6 | RabbitMQ event bus | Should | specified | |
-| F39-7 | Notification protocol logic server-side | Must | specified | |
-| F39-8 | False alarm recovery — cancellation logic | Must | specified | |
-| F39-9 | WhatsApp delivery via Twilio | Could | idea | |
+| F39-2 | Pulse service — scheduled overdue scanner | Must | done | APScheduler runs hourly inside FastAPI. Detects overdue vaults, honours all 3 protocols. |
+| F39-3 | Resend email delivery (plain text) | Must | done | Plain-text email sent via Resend to test inbox. From: onboarding@resend.dev. Swap to contact["email"] + verified domain for production. |
+| F39-4 | Server-side PDF generation | Must | specified | Python WeasyPrint or ReportLab. Attaches PDF to email. |
+| F39-5 | Twilio SMS delivery | Should | specified | SMS with PDF link (not attachment). Requires cloud storage for PDF hosting. |
+| F39-6 | RabbitMQ event bus | Should | specified | Introduces retry resilience. Can skip initially — scanner calls worker directly. |
+| F39-7 | Notification protocol logic server-side | Must | done | Delivered as part of F39-2. ping_then_notify / notify_immediately / escalate all implemented. |
+| F39-8 | False alarm recovery — cancellation logic | Must | specified | POST /checkin already resets overdueNotificationSent. Full cancellation of in-flight queue pending. |
+| F39-9 | WhatsApp delivery via Twilio | Could | idea | Requires Meta Business API approval. Defer until core delivery stable. |
 
 ### Won't Have
 
@@ -391,12 +435,13 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 
 ## End-of-Chat Checklist
 
-- [ ] Download the new `index.html`
+- [ ] Download the new `index.html` (if changed)
 - [ ] Download the new `CLAUDE.md`
 - [ ] Did anything structural change? Update `CLAUDE.md`
-- [ ] Replace files in VS Code (`./index.html` AND `./frontend/index.html`)
-- [ ] `cp index.html frontend/index.html` to ensure they are byte-for-byte identical
+- [ ] Replace files in VS Code (`./index.html` AND `./frontend/index.html` if changed)
+- [ ] `cp index.html frontend/index.html` to ensure they are byte-for-byte identical (if changed)
 - [ ] `git add -A`
 - [ ] `git commit -m "describe what changed"`
 - [ ] `git push`
 - [ ] GitHub Actions sync check should go green ✅
+- [ ] Railway redeploys backend automatically ✅
