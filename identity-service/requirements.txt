@@ -7,3 +7,4 @@ bcrypt
 python-dotenv
 resend
 apscheduler
+reportlab

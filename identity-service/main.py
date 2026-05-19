@@ -11,6 +11,19 @@ from bson import ObjectId
 import bcrypt
 import resend
 import os
+import base64
+import io
+
+# ─── F39-4: ReportLab imports ────────────────────────────────────────────────
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.units import mm
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+    HRFlowable, PageBreak, KeepTogether
+)
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
 
 load_dotenv()
 
@@ -88,16 +101,575 @@ def clean_user(user: dict) -> dict:
         "lastLogin": user.get("lastLogin", "").isoformat() if user.get("lastLogin") else None,
     }
 
-# ─── F39-3: EMAIL SENDER ──────────────────────────────────────────────────────
+
+# ─── F39-4: PDF GENERATION ────────────────────────────────────────────────────
+# Colour palette — mirrors the Aeterna Solid design system used in the frontend.
+# ReportLab uses 0–1 float values, not hex, so we divide by 255.
+NAVY    = colors.Color(0.18, 0.169, 0.149)   # #2e2b26 — warm charcoal (primary)
+SAGE    = colors.Color(0.353, 0.478, 0.431)  # #5a7a6e — warm sage (accent)
+OFFWHITE= colors.Color(0.988, 0.976, 0.957)  # #fdf9f4 — warm white
+CREAM   = colors.Color(0.929, 0.898, 0.863)  # #ede5d8 — linen card
+MUTED   = colors.Color(0.42, 0.388, 0.345)   # #6b6358 — secondary text
+LIGHT   = colors.Color(0.867, 0.835, 0.8)    # #ddd5c8 — divider/border
+RED     = colors.Color(0.729, 0.102, 0.102)  # #ba1a1a — error red
+
+
+def _make_styles():
+    """
+    Builds a dictionary of named ParagraphStyles.
+    ParagraphStyle = the ReportLab equivalent of a CSS class for text blocks.
+    """
+    base = getSampleStyleSheet()
+
+    return {
+        "cover_title": ParagraphStyle(
+            "cover_title",
+            fontName="Helvetica-Bold",
+            fontSize=26,
+            textColor=OFFWHITE,
+            leading=32,
+            spaceAfter=6,
+        ),
+        "cover_sub": ParagraphStyle(
+            "cover_sub",
+            fontName="Helvetica",
+            fontSize=11,
+            textColor=colors.Color(0.706, 0.78, 0.753),  # muted sage-blue
+            leading=16,
+        ),
+        "cover_meta": ParagraphStyle(
+            "cover_meta",
+            fontName="Helvetica",
+            fontSize=8.5,
+            textColor=colors.Color(0.55, 0.627, 0.6),
+            leading=12,
+        ),
+        "section_label": ParagraphStyle(
+            "section_label",
+            fontName="Helvetica-Bold",
+            fontSize=7.5,
+            textColor=MUTED,
+            leading=10,
+            spaceAfter=6,
+        ),
+        "heading": ParagraphStyle(
+            "heading",
+            fontName="Helvetica-Bold",
+            fontSize=16,
+            textColor=NAVY,
+            leading=22,
+            spaceAfter=4,
+        ),
+        "subheading": ParagraphStyle(
+            "subheading",
+            fontName="Helvetica-Bold",
+            fontSize=11,
+            textColor=NAVY,
+            leading=15,
+            spaceAfter=2,
+        ),
+        "body": ParagraphStyle(
+            "body",
+            fontName="Helvetica",
+            fontSize=9.5,
+            textColor=NAVY,
+            leading=14,
+            spaceAfter=4,
+        ),
+        "body_muted": ParagraphStyle(
+            "body_muted",
+            fontName="Helvetica",
+            fontSize=9,
+            textColor=MUTED,
+            leading=13,
+            spaceAfter=3,
+        ),
+        "label": ParagraphStyle(
+            "label",
+            fontName="Helvetica-Bold",
+            fontSize=7.5,
+            textColor=MUTED,
+            leading=10,
+            spaceAfter=1,
+        ),
+        "value": ParagraphStyle(
+            "value",
+            fontName="Helvetica",
+            fontSize=9.5,
+            textColor=NAVY,
+            leading=13,
+            spaceAfter=6,
+        ),
+        "letter": ParagraphStyle(
+            "letter",
+            fontName="Helvetica-Oblique",
+            fontSize=10,
+            textColor=NAVY,
+            leading=16,
+            spaceAfter=4,
+        ),
+        "letter_placeholder": ParagraphStyle(
+            "letter_placeholder",
+            fontName="Helvetica-Oblique",
+            fontSize=9,
+            textColor=MUTED,
+            leading=13,
+            spaceAfter=4,
+        ),
+        "step_text": ParagraphStyle(
+            "step_text",
+            fontName="Helvetica",
+            fontSize=9.5,
+            textColor=NAVY,
+            leading=14,
+        ),
+        "footer": ParagraphStyle(
+            "footer",
+            fontName="Helvetica",
+            fontSize=7,
+            textColor=colors.Color(0.55, 0.627, 0.6),
+            leading=10,
+            alignment=TA_CENTER,
+        ),
+    }
+
+
+def _section_header(title: str, styles: dict) -> list:
+    """
+    Renders a shaded section header bar — equivalent to the grey category
+    dividers used in the jsPDF version.
+    Returns a list of flowable elements (ReportLab's word for renderable objects).
+    """
+    return [
+        Spacer(1, 4 * mm),
+        Table(
+            [[Paragraph(title.upper(), styles["section_label"])]],
+            colWidths=[170 * mm],
+            style=TableStyle([
+                ("BACKGROUND", (0, 0), (-1, -1), CREAM),
+                ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ("ROUNDEDCORNERS", (0, 0), (-1, -1), [4, 4, 4, 4]),
+            ]),
+        ),
+        Spacer(1, 4 * mm),
+    ]
+
+
+def _divider() -> HRFlowable:
+    """Thin horizontal rule between items."""
+    return HRFlowable(width="100%", thickness=0.4, color=LIGHT, spaceAfter=4 * mm, spaceBefore=2 * mm)
+
+
+def _label_value(label: str, value: str, styles: dict) -> list:
+    """Renders a LABEL / value pair — used throughout the document."""
+    if not value:
+        return []
+    return [
+        Paragraph(label.upper(), styles["label"]),
+        Paragraph(value, styles["value"]),
+    ]
+
+
+def generate_pdf_for_contact(contact: dict, vault: dict, owner_name: str) -> bytes:
+    """
+    Generates the full 6-section A4 PDF package for a given contact.
+
+    Returns the PDF as raw bytes, which can then be base64-encoded and
+    attached to an email — or written to disk for debugging.
+
+    The structure mirrors the jsPDF client-side version page-for-page:
+      Page 1 — Cover + personal letter
+      Page 2 — Action checklist
+      Page 3 — Will & legal documents
+      Page 4 — Asset register
+      Page 5 — My wishes
+      Page 6 — Key contacts
+    """
+    styles = _make_styles()
+
+    # io.BytesIO = an in-memory file. We write the PDF here instead of to disk,
+    # so we never need to touch the filesystem on Railway.
+    buffer = io.BytesIO()
+
+    page_w, page_h = A4
+    margin = 20 * mm
+
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=margin,
+        rightMargin=margin,
+        topMargin=margin,
+        bottomMargin=20 * mm,
+        title=f"Emergency Exit — {contact.get('first', '')} {contact.get('last', '')}",
+    )
+
+    contact_name = f"{contact.get('first', '')} {contact.get('last', '')}".strip()
+    gen_date = datetime.utcnow().strftime("%-d %B %Y")
+    will_status_labels = {
+        "signed": "Signed & legally witnessed",
+        "draft": "Draft — not yet signed",
+        "none": "No Will exists yet",
+    }
+
+    story = []  # story = the ordered list of elements ReportLab will lay out
+
+    # ── PAGE 1: COVER ─────────────────────────────────────────────────────────
+    # The cover is a full-page dark background. ReportLab doesn't support
+    # full-bleed page backgrounds natively in flowable mode, so we use a
+    # wide Table spanning the full content width with a dark fill colour.
+    cover_content = [
+        [
+            Paragraph("Emergency Exit", styles["cover_title"]),
+            Paragraph(f"Prepared for {contact_name}", styles["cover_sub"]),
+            Spacer(1, 4 * mm),
+            Paragraph(f"Generated {gen_date}", styles["cover_meta"]),
+        ]
+    ]
+    cover_table = Table(
+        cover_content,
+        colWidths=[170 * mm],
+        style=TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), NAVY),
+            ("LEFTPADDING", (0, 0), (-1, -1), 12),
+            ("TOPPADDING", (0, 0), (-1, -1), 12),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+            ("ROUNDEDCORNERS", (0, 0), (-1, -1), [8, 8, 8, 8]),
+        ]),
+        rowHeights=[None],
+    )
+    story.append(cover_table)
+    story.append(Spacer(1, 6 * mm))
+
+    # Intro notice box
+    intro_text = (
+        f"If you are reading this, {owner_name} has not confirmed their check-in within "
+        "the required period. This package contains everything you need to act on their behalf. "
+        "No login or app is required."
+    )
+    intro_table = Table(
+        [[Paragraph(intro_text, styles["body"])]],
+        colWidths=[170 * mm],
+        style=TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.Color(0.929, 0.898, 0.863)),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+            ("TOPPADDING", (0, 0), (-1, -1), 10),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+            ("LINEAFTER", (0, 0), (0, -1), 2, SAGE),  # left accent bar
+        ]),
+    )
+    story.append(intro_table)
+    story.append(Spacer(1, 4 * mm))
+
+    # Personal letter
+    story += _section_header("Personal Letter", styles)
+    letter_text = contact.get("letter", "").strip()
+    if letter_text:
+        letter_table = Table(
+            [[Paragraph(letter_text, styles["letter"])]],
+            colWidths=[170 * mm],
+            style=TableStyle([
+                ("BACKGROUND", (0, 0), (-1, -1), colors.Color(0.973, 0.965, 0.953)),
+                ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                ("TOPPADDING", (0, 0), (-1, -1), 10),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+                ("LINEAFTER", (0, 0), (0, -1), 1.5, SAGE),
+            ]),
+        )
+        story.append(letter_table)
+    else:
+        story.append(Paragraph(
+            "[ A personal letter from the vault holder has not been written for this contact. ]",
+            styles["letter_placeholder"]
+        ))
+    story.append(PageBreak())
+
+    # ── PAGE 2: ACTION CHECKLIST ──────────────────────────────────────────────
+    story.append(Paragraph("What to do first", styles["heading"]))
+    story.append(Paragraph("Work through these steps in order. Take your time.", styles["body_muted"]))
+    story.append(Spacer(1, 4 * mm))
+
+    will = vault.get("will")
+    supp_docs = vault.get("suppDocs") or []
+    sow = next((d for d in supp_docs if d.get("type") == "Statement of Wishes"), None)
+
+    steps = []
+    if will and will.get("solicitor"):
+        steps.append(f"Contact the solicitor: {will['solicitor']}")
+    if will and will.get("loc1"):
+        steps.append(f"Locate the original Will: {will['loc1']}")
+    if sow:
+        steps.append(f"Find the Statement of Wishes: {sow.get('loc') or sow.get('name', 'See document details')}")
+    if vault.get("assets"):
+        steps.append("Review the Asset Register in this document (page 4)")
+    steps.append("Notify relevant financial institutions and government agencies")
+    steps.append("Keep a copy of this document in a safe place")
+
+    for i, step in enumerate(steps, 1):
+        # Number badge + step text as a two-column table row
+        step_row = Table(
+            [[
+                Paragraph(f"<font color='#fdf9f4'><b>{i}</b></font>", ParagraphStyle(
+                    "num", fontName="Helvetica-Bold", fontSize=9,
+                    textColor=OFFWHITE, alignment=TA_CENTER
+                )),
+                Paragraph(step, styles["step_text"]),
+            ]],
+            colWidths=[8 * mm, 162 * mm],
+            style=TableStyle([
+                ("BACKGROUND", (0, 0), (0, 0), SAGE),
+                ("ALIGN", (0, 0), (0, 0), "CENTER"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                ("LEFTPADDING", (1, 0), (1, 0), 10),
+            ]),
+        )
+        story.append(step_row)
+        story.append(_divider())
+
+    story.append(PageBreak())
+
+    # ── PAGE 3: WILL & LEGAL DOCUMENTS ───────────────────────────────────────
+    story.append(Paragraph("Will & Legal Documents", styles["heading"]))
+    story.append(Spacer(1, 2 * mm))
+
+    if will:
+        story += _section_header("Will Details", styles)
+        story += _label_value("Status", will_status_labels.get(will.get("status", ""), will.get("status", "")), styles)
+        if will.get("date"):
+            story += _label_value("Date Signed", will["date"], styles)
+        if will.get("solicitor"):
+            story += _label_value("Solicitor / Law Firm", will["solicitor"], styles)
+        if will.get("loc1"):
+            story += _label_value("Primary Location", will["loc1"], styles)
+        if will.get("loc2"):
+            story += _label_value("Secondary Location", will["loc2"], styles)
+        if will.get("notes"):
+            story += _label_value("Additional Notes", will["notes"], styles)
+    else:
+        story.append(Paragraph("No Will details have been recorded.", styles["body_muted"]))
+
+    story.append(Spacer(1, 4 * mm))
+
+    if supp_docs:
+        story += _section_header("Supporting Documents", styles)
+        for doc in supp_docs:
+            doc_rows = [
+                [Paragraph(doc.get("name", ""), styles["subheading"])],
+                [Paragraph(doc.get("type", ""), styles["body_muted"])],
+            ]
+            if doc.get("loc"):
+                doc_rows.append([Paragraph(f"Location: {doc['loc']}", ParagraphStyle(
+                    "loc", fontName="Helvetica", fontSize=9, textColor=SAGE, leading=13
+                ))])
+
+            doc_table = Table(
+                doc_rows,
+                colWidths=[170 * mm],
+                style=TableStyle([
+                    ("BACKGROUND", (0, 0), (-1, -1), OFFWHITE),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 12),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                    ("TOPPADDING", (0, 0), (0, 0), 8),
+                    ("BOTTOMPADDING", (0, -1), (-1, -1), 8),
+                    ("BOX", (0, 0), (-1, -1), 0.5, LIGHT),
+                    ("LINEAFTER", (0, 0), (0, -1), 2, SAGE),
+                ]),
+            )
+            story.append(doc_table)
+            story.append(Spacer(1, 3 * mm))
+
+    story.append(PageBreak())
+
+    # ── PAGE 4: ASSET REGISTER ────────────────────────────────────────────────
+    story.append(Paragraph("Asset Register", styles["heading"]))
+    story.append(Paragraph(
+        "All assets recorded by the vault holder at time of package generation.",
+        styles["body_muted"]
+    ))
+    story.append(Spacer(1, 2 * mm))
+
+    assets = vault.get("assets") or []
+    if not assets:
+        story.append(Paragraph("No assets have been recorded.", styles["body_muted"]))
+    else:
+        # Group by category
+        seen_cats = []
+        for asset in assets:
+            cat = asset.get("category", "Other")
+            if cat not in seen_cats:
+                seen_cats.append(cat)
+
+        for cat in seen_cats:
+            cat_assets = [a for a in assets if a.get("category") == cat]
+            story += _section_header(cat, styles)
+            for asset in cat_assets:
+                name_para = Paragraph(asset.get("name", ""), styles["subheading"])
+                value_str = f"${round(asset['value']):,}" if asset.get("value") else ""
+                value_para = Paragraph(value_str, ParagraphStyle(
+                    "asset_val", fontName="Helvetica-Bold", fontSize=9,
+                    textColor=SAGE, leading=13
+                )) if value_str else Paragraph("", styles["body"])
+                detail_para = Paragraph(asset.get("details", ""), styles["body_muted"])
+                beneficiary_str = f"Beneficiary: {asset['beneficiary']}" if asset.get("beneficiary") else ""
+
+                asset_data = [[name_para], [value_para], [detail_para]]
+                if beneficiary_str:
+                    asset_data.append([Paragraph(beneficiary_str, ParagraphStyle(
+                        "ben", fontName="Helvetica-Bold", fontSize=7.5,
+                        textColor=MUTED, leading=10
+                    ))])
+
+                asset_table = Table(
+                    asset_data,
+                    colWidths=[170 * mm],
+                    style=TableStyle([
+                        ("BACKGROUND", (0, 0), (-1, -1), OFFWHITE),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                        ("TOPPADDING", (0, 0), (0, 0), 8),
+                        ("BOTTOMPADDING", (0, -1), (-1, -1), 8),
+                        ("BOX", (0, 0), (-1, -1), 0.5, LIGHT),
+                        ("LINEBEFORE", (0, 0), (0, -1), 2, NAVY),
+                    ]),
+                )
+                story.append(KeepTogether(asset_table))
+                story.append(Spacer(1, 3 * mm))
+
+    story.append(PageBreak())
+
+    # ── PAGE 5: MY WISHES ─────────────────────────────────────────────────────
+    story.append(Paragraph("My Wishes", styles["heading"]))
+    story.append(Paragraph(
+        "These are the vault holder's recorded wishes and final instructions.",
+        styles["body_muted"]
+    ))
+    story.append(Spacer(1, 2 * mm))
+
+    wishes = vault.get("wishes") or []
+    priority_colors = {"high": RED, "medium": MUTED, "low": SAGE}
+
+    if not wishes:
+        story.append(Paragraph("No wishes have been recorded.", styles["body_muted"]))
+    else:
+        seen_wcats = []
+        for w in wishes:
+            c = w.get("category", "Other")
+            if c not in seen_wcats:
+                seen_wcats.append(c)
+
+        for cat in seen_wcats:
+            cat_wishes = [w for w in wishes if w.get("category") == cat]
+            story += _section_header(cat, styles)
+            for wish in cat_wishes:
+                pri = wish.get("priority", "medium")
+                pri_color = priority_colors.get(pri, MUTED)
+                badge = Table(
+                    [[Paragraph(pri.upper(), ParagraphStyle(
+                        "badge", fontName="Helvetica-Bold", fontSize=6.5,
+                        textColor=OFFWHITE, alignment=TA_CENTER
+                    ))]],
+                    colWidths=[16 * mm],
+                    style=TableStyle([
+                        ("BACKGROUND", (0, 0), (-1, -1), pri_color),
+                        ("TOPPADDING", (0, 0), (-1, -1), 3),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                    ]),
+                )
+                wish_title = Paragraph(wish.get("title", ""), styles["subheading"])
+                header_row = Table(
+                    [[badge, wish_title]],
+                    colWidths=[18 * mm, 152 * mm],
+                    style=TableStyle([
+                        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                        ("LEFTPADDING", (1, 0), (1, 0), 8),
+                    ]),
+                )
+                story.append(header_row)
+                if wish.get("details"):
+                    story.append(Paragraph(wish["details"], styles["body_muted"]))
+                story.append(_divider())
+
+    story.append(PageBreak())
+
+    # ── PAGE 6: KEY CONTACTS ─────────────────────────────────────────────────
+    story.append(Paragraph("Key People to Contact", styles["heading"]))
+    story.append(Spacer(1, 2 * mm))
+
+    kin = vault.get("kin") or []
+    notify_labels = {
+        "email": "Email",
+        "sms": "SMS",
+        "whatsapp": "WhatsApp",
+        "email_and_sms": "Email + SMS",
+    }
+
+    if not kin:
+        story.append(Paragraph("No contacts have been recorded.", styles["body_muted"]))
+    else:
+        for i, k in enumerate(kin):
+            initials = (
+                (k.get("first", "")[:1] + k.get("last", "")[:1]).upper()
+            )
+            full_name = f"{k.get('first', '')} {k.get('last', '')}".strip()
+            rel = k.get("rel", "Contact")
+            email = k.get("email", "")
+            phone = k.get("phone", "")
+            notify = notify_labels.get(k.get("notifyVia", "email"), "Email")
+
+            bg = OFFWHITE if i % 2 == 0 else CREAM
+
+            rows = [[Paragraph(full_name, styles["subheading"])]]
+            rows.append([Paragraph(rel, styles["body_muted"])])
+            if email:
+                rows.append([Paragraph(email, ParagraphStyle(
+                    "email_link", fontName="Helvetica", fontSize=9,
+                    textColor=SAGE, leading=13
+                ))])
+            if phone:
+                rows.append([Paragraph(phone, styles["body_muted"])])
+            rows.append([Paragraph(f"Notify via: {notify}", styles["label"])])
+
+            contact_table = Table(
+                rows,
+                colWidths=[170 * mm],
+                style=TableStyle([
+                    ("BACKGROUND", (0, 0), (-1, -1), bg),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 12),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                    ("TOPPADDING", (0, 0), (0, 0), 8),
+                    ("BOTTOMPADDING", (0, -1), (-1, -1), 8),
+                    ("BOX", (0, 0), (-1, -1), 0.5, LIGHT),
+                ]),
+            )
+            story.append(contact_table)
+            story.append(Spacer(1, 3 * mm))
+
+    # Build the PDF — this writes all the elements into buffer
+    doc.build(story)
+
+    # Rewind the buffer to the start so we can read the bytes back out
+    buffer.seek(0)
+    return buffer.read()
+
+
+# ─── F39-3 + F39-4: EMAIL SENDER (updated to attach PDF) ─────────────────────
 def send_notification_email(vault_owner_name: str, contact: dict, vault: dict):
     """
-    Sends a plain-text notification email to the test inbox.
+    Sends a notification email to the contact with the full PDF package attached.
+    The PDF is generated server-side by generate_pdf_for_contact(), then
+    base64-encoded and passed to Resend's attachments API.
     In production, replace TEST_INBOX with contact["email"].
     """
     contact_name = f"{contact.get('first', '')} {contact.get('last', '')}".strip()
+    first_name = contact.get("first", "there")
     notify_method = contact.get("notifyVia", "email")
 
-    # Build the email body
     asset_count = len(vault.get("assets", []))
     wish_count = len(vault.get("wishes", []))
     has_will = vault.get("will") is not None
@@ -120,13 +692,14 @@ If you are unable to contact them, their Emergency Exit vault contains the follo
   • Will details recorded: {"Yes" if has_will else "No"}
   • Personal letter for you: {"Yes" if has_letter else "No"}
 
-A full document package will follow in a future update to this service.
+The full document package is attached to this email as a PDF.
 
 — What to do now —
 
 1. Try to contact {vault_owner_name} directly.
-2. If you cannot reach them, check in with other nominated contacts.
-3. If you have genuine concerns for their wellbeing, contact emergency services.
+2. Open the attached PDF for a full record of their assets, wishes, and instructions.
+3. If you cannot reach them, check in with other nominated contacts.
+4. If you have genuine concerns for their wellbeing, contact emergency services.
 
 This notification was sent to you because you were nominated by {vault_owner_name} via the Emergency Exit app. If this was sent in error, no action is required.
 
@@ -135,19 +708,44 @@ Emergency Exit — Digital Legacy Vault
 This is an automated message. Do not reply to this email.
 """
 
+    # ── F39-4: Generate the PDF and base64-encode it for the email attachment ─
+    pdf_attached = False
+    attachments = []
     try:
-        resend.Emails.send({
+        pdf_bytes = generate_pdf_for_contact(contact, vault, vault_owner_name)
+        # Base64 encoding converts raw binary (PDF bytes) into a plain-text string
+        # that can safely travel inside a JSON API request to Resend.
+        pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+        safe_name = f"{contact.get('first', 'Contact')}-{contact.get('last', 'Package')}".replace(" ", "-")
+        attachments = [{
+            "filename": f"Emergency-Exit-{safe_name}.pdf",
+            "content": pdf_b64,
+        }]
+        pdf_attached = True
+        print(f"  📄 PDF generated for {contact_name} ({len(pdf_bytes):,} bytes)")
+    except Exception as pdf_err:
+        # If PDF generation fails, we still send the plain-text email.
+        # This is a deliberate fallback — a notification without a PDF is
+        # better than no notification at all.
+        print(f"  ⚠️  PDF generation failed for {contact_name}: {pdf_err} — sending email without attachment")
+
+    try:
+        email_payload = {
             "from": "onboarding@resend.dev",
             "to": TEST_INBOX,  # ← swap to contact["email"] when going live
             "subject": f"[Emergency Exit] Action may be required — {vault_owner_name} has missed a check-in",
             "text": body,
-        })
-        print(f"✅ Email sent for contact: {contact_name} (redirected to test inbox)")
+        }
+        if attachments:
+            email_payload["attachments"] = attachments
+
+        resend.Emails.send(email_payload)
+        status = "with PDF attachment" if pdf_attached else "without PDF (fallback)"
+        print(f"✅ Email sent for contact: {contact_name} {status} (redirected to test inbox)")
         return True
     except Exception as e:
         print(f"❌ Email failed for contact {contact_name}: {e}")
         return False
-
 
 
 # ─── F39-8: ALL CLEAR EMAIL ───────────────────────────────────────────────────
@@ -185,6 +783,7 @@ This is an automated message. Do not reply to this email.
     except Exception as e:
         print(f"❌ All-clear email failed for contact {contact_name}: {e}")
         return False
+
 
 # ─── F39-7: NOTIFICATION PROTOCOL LOGIC ──────────────────────────────────────
 def get_contacts_to_notify(vault_doc: dict, days_overdue: int) -> list:
@@ -282,7 +881,7 @@ def run_pulse_scan():
                 print(f"  ⏳ User {user_id}: protocol says hold — no emails sent yet")
                 continue
 
-            # ── Step 8: Send emails ───────────────────────────────────────────
+            # ── Step 8: Send emails (now with PDF attachment via F39-4) ───────
             sent_count = 0
             for contact in contacts_to_notify:
                 success = send_notification_email(owner_name, contact, vault)
