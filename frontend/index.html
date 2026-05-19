@@ -9,6 +9,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script>
 const API='https://emergency-exit-production.up.railway.app';
+
+// ─── LOGIN ────────────────────────────────────────────────────────────────────
 async function doLogin(){
   const username=document.getElementById('li-user').value.trim();
   const password=document.getElementById('li-pass').value;
@@ -21,16 +23,23 @@ async function doLogin(){
     const data=await res.json();
     sessionStorage.setItem('ee_token',data.token);
     sessionStorage.setItem('ee_user',JSON.stringify(data.user));
-    showApp(data.user);load();render();
-  }catch(e){errEl.textContent='Connection error - please try again.';errEl.classList.add('on');}
+    // F41: showApp is now async — waits for vault to load from server before rendering
+    await showApp(data.user);
+  }catch(e){errEl.textContent='Connection error — please try again.';errEl.classList.add('on');}
 }
-function showApp(user){
+
+// F41: showApp is now async so it can await the server vault fetch before render()
+async function showApp(user){
   document.getElementById('login-wall').classList.add('hidden');
   document.getElementById('logout-btn').classList.add('on');
   const g=document.getElementById('user-greeting');
   g.textContent='Hi, '+user.name.split(' ')[0];
   g.classList.add('on');
+  // F41: load vault from server (falls back to localStorage if server is unreachable)
+  await loadFromServer();
+  render();
 }
+
 function doLogout(){
   sessionStorage.removeItem('ee_token');
   sessionStorage.removeItem('ee_user');
@@ -38,16 +47,19 @@ function doLogout(){
   document.getElementById('logout-btn').classList.remove('on');
   document.getElementById('user-greeting').classList.remove('on');
   document.getElementById('li-pass').value='';
+  // Reset in-memory state. Does NOT wipe localStorage — keeps it as offline cache.
   S={assets:[],wishes:[],kin:[],will:null,suppDocs:[],lastCheckin:null,fc:2,fu:'months',gp:3,v:'face',notifySeq:'in_order',notifyProto:'ping_then_notify',log:[],saveCount:0};
   render();
 }
-document.addEventListener('DOMContentLoaded',()=>{
+
+document.addEventListener('DOMContentLoaded',async ()=>{
   ['li-user','li-pass'].forEach(id=>{
     document.getElementById(id).addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();});
   });
   const token=sessionStorage.getItem('ee_token');
   const user=sessionStorage.getItem('ee_user');
-  if(token&&user){showApp(JSON.parse(user));load();render();}
+  // F41: on page refresh, re-fetch vault from server (keeps cross-device sync fresh)
+  if(token&&user){await showApp(JSON.parse(user));}
 });
 
 </script>
@@ -578,12 +590,52 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 
 <script>
 let S={assets:[],wishes:[],kin:[],will:null,suppDocs:[],lastCheckin:null,fc:2,fu:'months',gp:3,v:'face',notifySeq:'in_order',notifyProto:'ping_then_notify',log:[],saveCount:0};
+
+// ─── F41: SERVER-FIRST VAULT LOAD ────────────────────────────────────────────
+// Strategy: server is source of truth. On login/refresh:
+//   1. Fetch GET /vault from server (requires auth token)
+//   2. If successful → use server vault, write to localStorage as offline cache
+//   3. If server is unreachable or returns no vault → fall back to localStorage
+//   4. If localStorage is also empty → start fresh (new user)
+//
+// "Server wins": we always trust the server over localStorage.
+// This means a user on a second device always gets the latest version.
+async function loadFromServer(){
+  const token=sessionStorage.getItem('ee_token');
+  if(token){
+    try{
+      const res=await fetch(API+'/vault',{headers:{'Authorization':'Bearer '+token}});
+      if(res.ok){
+        const data=await res.json();
+        if(data.ok&&data.vault){
+          // Server has vault — merge into S, update localStorage as offline cache
+          S={...S,...data.vault};
+          try{localStorage.setItem('ee_v3',JSON.stringify(S));}catch(e){}
+          return; // success — skip localStorage fallback
+        }
+      }
+    }catch(e){
+      // Server unreachable — fall through to localStorage silently
+      console.warn('F41: Server vault fetch failed, using localStorage fallback',e);
+    }
+  }
+  // Fallback: load from localStorage (offline or first-ever login with no server vault)
+  try{const d=localStorage.getItem('ee_v3');if(d){const p=JSON.parse(d);S={...S,...p};}}catch(e){}
+}
+
+// Legacy local-only load (kept as internal fallback)
 function load(){try{const d=localStorage.getItem('ee_v3');if(d){const p=JSON.parse(d);S={...S,...p};}}catch(e){}}
+
 function save(){
+  // Write to localStorage immediately (instant, works offline)
   try{localStorage.setItem('ee_v3',JSON.stringify(S));}catch(e){}
+  // Then sync to server silently in the background (fire-and-forget)
   syncVault();
   render();
 }
+
+// Background sync — fires after every save()
+// The server restructures the flat S blob into a proper MongoDB schema
 async function syncVault(){
   const token=sessionStorage.getItem('ee_token');
   if(!token)return;
@@ -597,6 +649,7 @@ async function syncVault(){
     console.warn('Vault sync failed:',e);
   }
 }
+
 function go(s){document.querySelectorAll('.scr').forEach(e=>e.classList.remove('on'));document.querySelectorAll('.ni').forEach(e=>e.classList.remove('on'));document.getElementById('s-'+s).classList.add('on');document.getElementById('n-'+s).classList.add('on');document.querySelector('.body').scrollTop=0;}
 function openM(id,cat){
   if(id==='am'){document.getElementById('am-edit-id').value='';document.getElementById('am-title').textContent='Record New Asset';document.getElementById('am-save-btn').textContent='Save Asset';['an','av','adet','ab2','ano'].forEach(i=>document.getElementById(i).value='');document.getElementById('ac2').selectedIndex=0;}
@@ -632,7 +685,7 @@ function saveLetter(){
   toast(text?'Letter saved ✓':'Letter cleared ✓');
 }
 
-// F36: Warm toast messages for early saves — makes the app feel encouraging
+// F36: Warm toast messages for early saves
 function warmToast(base){
   S.saveCount=(S.saveCount||0)+1;
   const count=S.saveCount;
@@ -699,12 +752,9 @@ async function serverCheckin(){
   }
 }
 let fUnit='months',fCount=2;
-// F35: Auto-save — setU now saves immediately instead of waiting for "Confirm Settings"
 function setU(u){fUnit=u;S.fu=u;document.getElementById('tw').classList.toggle('on',u==='weeks');document.getElementById('tm').classList.toggle('on',u==='months');document.getElementById('fu').textContent=u.charAt(0).toUpperCase()+u.slice(1);save();toast('Frequency updated ✓');}
-// F35: Auto-save — adj now saves immediately
 function adj(d){fCount=Math.max(1,Math.min(24,fCount+d));document.getElementById('fc').textContent=fCount;S.fc=fCount;save();toast('Frequency updated ✓');}
 function adjGP(d){S.gp=Math.max(1,Math.min(30,S.gp+d));document.getElementById('gp-val').textContent=S.gp;save();toast('Grace period updated ✓');}
-// F35: Auto-save — setV now saves immediately
 function setV(v){S.v=v;document.getElementById('rf').className='rd'+(v==='face'?' on':'');document.getElementById('rp2').className='rd'+(v==='pin'?' on':'');save();toast('Verification updated ✓');}
 function setProto(p){S.notifyProto=p;save();toast('Protocol updated ✓');}
 function log(msg){S.log.unshift({msg,time:new Date().toLocaleString()});if(S.log.length>20)S.log.pop();}
@@ -848,22 +898,18 @@ function generatePDF(kinId) {
 function render(){
   const{pct,tips}=comp();
 
-  // ─── F01: Overdue detection — runs every render ───────────────────────────
+  // ─── F01: Overdue detection ───────────────────────────────────────────────
   const {overdue, daysOverdue, dueDate, graceEnd} = getOverdueStatus();
   const hasContacts = S.kin.length > 0;
   const showOverdue = overdue && hasContacts;
 
-  // ─── F05: Reminder detection — only active when NOT overdue ───────────────
+  // ─── F05: Reminder detection — only active when NOT overdue ──────────────
   const {dueSoon, daysLeft} = getReminderStatus();
   const showReminder = dueSoon && !showOverdue && !overdue;
 
-  // Show/hide the overdue banner
   document.getElementById('overdue-banner').style.display = showOverdue ? 'block' : 'none';
-
-  // F05: Show/hide the reminder banner
   document.getElementById('reminder-banner').style.display = showReminder ? 'block' : 'none';
 
-  // F05: Update reminder banner content with contextual detail
   if(showReminder){
     const graceDays = S.gp || 3;
     if(daysLeft === 0){
@@ -878,11 +924,9 @@ function render(){
     }
   }
 
-  // Switch hero text between normal and overdue
   document.getElementById('home-hero-normal').style.display = showOverdue ? 'none' : 'block';
   document.getElementById('home-hero-overdue').style.display = showOverdue ? 'block' : 'none';
 
-  // Switch status badge — three states: overdue (red), due soon (amber), active (teal)
   const badge = document.getElementById('status-badge');
   if(showOverdue){
     badge.innerHTML = '<div class="tag" style="background:rgba(186,26,26,.08);color:var(--er);border:1px solid rgba(186,26,26,.2);"><span class="m mf" style="font-size:10px;vertical-align:-1px;">warning</span> Overdue</div>';
@@ -892,7 +936,6 @@ function render(){
     badge.innerHTML = '<div class="tag ta"><span class="m mf" style="font-size:10px;vertical-align:-1px;">verified_user</span> Active</div>';
   }
 
-  // F01: Update overdue banner details
   if(showOverdue){
     const overdueStr = daysOverdue === 0 ? 'today' : daysOverdue + ' day' + (daysOverdue!==1?'s':'') + ' ago';
     document.getElementById('overdue-sub').textContent = 'Grace period expired ' + overdueStr;
@@ -912,7 +955,6 @@ function render(){
     }
     document.getElementById('overdue-detail').textContent = detailText;
 
-    // F01: Render compact notification queue on Home screen
     const queue = buildNotificationQueue(daysOverdue);
     const homeNQ = document.getElementById('home-nq');
     homeNQ.style.display = 'block';
@@ -935,7 +977,6 @@ function render(){
     document.getElementById('home-nq').style.display = 'none';
   }
 
-  // F01 + F05: Update pulse card styling — three states
   const pulseIcon = document.getElementById('pulse-icon');
   const pulseLabel = document.getElementById('pulse-label');
   const pulseTitle = document.getElementById('pulse-title');
@@ -943,7 +984,6 @@ function render(){
   const daysLabel = document.getElementById('days-label');
   const pulseCard = document.getElementById('pulse-card');
 
-  // F05: Remove/add pulse-due-soon class for amber styling
   pulseCard.classList.toggle('pulse-due-soon', showReminder);
 
   if(showOverdue){
@@ -974,7 +1014,6 @@ function render(){
     daysLabel.style.color = 'var(--ac)';
   }
 
-  // F30: Apply pulse de-emphasis when completeness < 40%
   const completenessCard=document.getElementById('completeness-card');
   const pulseHint=document.getElementById('pulse-hint');
   const isDimmed=pct<40 && !showOverdue && !showReminder;
@@ -1007,7 +1046,6 @@ function render(){
 
   document.getElementById('d-act').innerHTML=S.log.length===0?'<div style="text-align:center;padding:18px 0;color:var(--ov);font-size:13px;">No activity yet</div>':S.log.slice(0,5).map(l=>'<div class="ai"><div class="aico"><span class="m">history</span></div><div><div style="font-weight:700;font-size:13px;color:var(--p);line-height:1.2;">'+l.msg+'</div><div style="font-size:11px;color:var(--ov);margin-top:1px;">'+l.time+'</div></div></div>').join('');
 
-  // Ledger render — F34: standardised delete button using .del-btn class
   const cats=['Bank account','Property','Investment','Superannuation','Life insurance','Vehicle','Cryptocurrency','Business','Personal item','Digital account','Other'];
   const lel=document.getElementById('l-content');
   if(!S.assets.length){
@@ -1018,10 +1056,8 @@ function render(){
   }
   document.getElementById('l-pct').textContent=pct+'%';
 
-  // Will section
   const wb=document.getElementById('will-badge'),wtd=document.getElementById('will-title-display'),wld=document.getElementById('will-loc-display');
   if(S.will){wb.textContent=willStatusLabel[S.will.status]||S.will.status;wb.className='tag '+(S.will.status==='signed'?'tw':'ts');wtd.textContent=S.will.solicitor?'Will held by '+S.will.solicitor:'Will details recorded';wld.textContent=S.will.loc1||'Location not specified';document.querySelector('#will-summary .upload-btn').innerHTML='<span class="m">edit</span> Edit Will details';}else{wb.textContent='Not recorded';wb.className='tag ts';wtd.textContent='No Will recorded yet';wld.textContent='Tap below to add your Will details';document.querySelector('#will-summary .upload-btn').innerHTML='<span class="m">edit_note</span> Record Will details';}
-  // F34: Supplementary docs — standardised delete button
   const sd=document.getElementById('supp-docs'),docs=S.suppDocs||[];
   sd.innerHTML=docs.map(d=>'<div class="attach-row"><span class="m mf" style="font-size:18px;color:var(--ac);">description</span><div style="flex:1;"><div class="attach-name">'+d.name+'</div><div class="attach-size">'+d.type+(d.loc?' · '+d.loc:'')+'</div></div><button class="del-btn" onclick="delSupp('+d.id+')"><span class="m">delete</span></button></div>').join('');
   const sowDoc=(S.suppDocs||[]).find(d=>d.type==='Statement of Wishes');
@@ -1029,7 +1065,6 @@ function render(){
   document.getElementById('sow-done').style.display=sowDoc?'block':'none';
   if(sowDoc)document.getElementById('sow-loc').textContent=sowDoc.loc?'Stored at: '+sowDoc.loc:'Location recorded';
 
-  // Wishes render — F34: standardised delete button
   const wishCats=['Funeral & Service','Medical / end of life care','Guardian for children','Pet care','Business succession','Digital accounts','Personal message','Charitable giving','Other'];
   const wishIcons={'Funeral & Service':'church','Medical / end of life care':'medical_services','Guardian for children':'family_restroom','Pet care':'pets','Business succession':'business','Digital accounts':'devices','Personal message':'mail','Charitable giving':'volunteer_activism','Other':'category'};
   const priColors={high:'td',medium:'ts',low:'ta'};
@@ -1041,7 +1076,6 @@ function render(){
     wel.innerHTML=ac2.map(cat=>{const items=S.wishes.filter(w=>w.category===cat);return'<div class="card" style="margin-bottom:12px;"><div class="sh" style="margin-bottom:8px;"><span style="font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--sec);display:flex;align-items:center;gap:5px;"><span class="m" style="font-size:15px;">'+(wishIcons[cat]||'category')+'</span>'+cat.toUpperCase()+'</span><span style="font-size:11px;font-weight:700;color:var(--sec);">'+items.length+' ITEM'+(items.length!==1?'S':'')+'</span></div>'+items.map(w=>'<div class="li" style="padding-right:8px;"><div class="lic"><span class="m">'+(wishIcons[w.category]||'category')+'</span></div><div class="lib"><div class="lit">'+w.title+'</div><div class="lis">'+(w.details?w.details.substring(0,40)+(w.details.length>40?'...':''):w.category)+'</div></div><div style="display:flex;align-items:center;gap:6px;"><span class="tag '+(priColors[w.priority]||'ts')+'">'+w.priority+'</span><button onclick="editW('+w.id+')" style="background:none;border:none;cursor:pointer;padding:4px;"><span class="m" style="font-size:15px;color:var(--sec);">edit</span></button><button class="del-btn" onclick="delW('+w.id+')"><span class="m">delete</span></button></div></div>').join('')+'</div>';}).join('');
   }
 
-  // Contacts render — F34: standardised delete button
   document.getElementById('k-list').innerHTML=S.kin.length===0
     ?'<div class="empty-state"><div class="empty-icon"><span class="m" style="font-size:28px;color:var(--sec);">group</span></div><div class="empty-title">No contacts added yet</div><div class="empty-sub">Who should be contacted if something happens to you? Add someone you trust — you can always update this later.</div><button class="empty-cta" onclick="openM(\'km\')"><span class="m">add</span>Add your first contact</button></div>'
     :S.kin.map((k,i)=>{
@@ -1095,7 +1129,6 @@ function render(){
   document.getElementById('rp-3').className='rd'+(S.notifyProto==='escalate'?' on':'');
 }
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('on');setTimeout(()=>t.classList.remove('on'),2400);}
-// auth required before load
 </script>
 </body>
 </html>

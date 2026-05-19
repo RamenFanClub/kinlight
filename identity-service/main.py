@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pymongo import MongoClient
 from pydantic import BaseModel
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from jose import jwt, JWTError
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -100,6 +100,84 @@ def clean_user(user: dict) -> dict:
         "isTester": user.get("isTester", True),
         "createdAt": user.get("createdAt", "").isoformat() if user.get("createdAt") else None,
         "lastLogin": user.get("lastLogin", "").isoformat() if user.get("lastLogin") else None,
+    }
+
+
+# ─── F41: VAULT SCHEMA HELPERS ───────────────────────────────────────────────
+# These helpers translate between two formats:
+#   1. The flat S={...} blob the frontend sends (all fields at top level)
+#   2. The structured MongoDB document (check-in fields at top level, vault
+#      content in a sub-document so the pulse scanner can index and query them)
+#
+# MongoDB best practice: fields you query on must be at the top level of the
+# document so they can be indexed. Embedding them inside a nested blob means
+# MongoDB has to scan every document on every hourly pulse scan — slow and
+# expensive at scale.
+
+def ms_to_dt(ms):
+    """Converts a JavaScript Date.now() millisecond timestamp to a Python datetime."""
+    if ms is None:
+        return None
+    try:
+        return datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
+    except Exception:
+        return None
+
+def dt_to_ms(dt):
+    """Converts a Python datetime back to a JavaScript millisecond timestamp."""
+    if dt is None:
+        return None
+    try:
+        return int(dt.timestamp() * 1000)
+    except Exception:
+        return None
+
+def extract_vault_fields(vault_blob: dict) -> tuple:
+    """
+    Splits the flat vault blob into three parts for structured MongoDB storage:
+    - top_level: fields the pulse scanner queries (indexed, top-level in the doc)
+    - content: the rest of the vault (assets, wishes, contacts, etc.)
+    - log: activity log (bounded at 20 entries, safe to embed)
+    """
+    last_checkin_ms = vault_blob.get("lastCheckin")
+
+    top_level = {
+        "lastCheckin": ms_to_dt(last_checkin_ms),
+        "checkInFrequency": vault_blob.get("fc", 2),
+        "checkInUnit": vault_blob.get("fu", "months"),
+        "gracePeriodDays": vault_blob.get("gp", 3),
+        "notifyProto": vault_blob.get("notifyProto", "ping_then_notify"),
+    }
+
+    content_keys = {"assets", "wishes", "will", "suppDocs", "kin", "v", "notifySeq", "saveCount"}
+    content = {k: vault_blob.get(k) for k in content_keys if k in vault_blob}
+
+    log = vault_blob.get("log", [])
+
+    return top_level, content, log
+
+def reconstruct_vault_blob(vault_doc: dict) -> dict:
+    """
+    Rebuilds the flat S={...} blob the frontend expects from the structured
+    MongoDB document. Called by GET /vault when the frontend loads on login.
+    """
+    content = vault_doc.get("content", {})
+
+    return {
+        "lastCheckin": dt_to_ms(vault_doc.get("lastCheckin")),
+        "fc": vault_doc.get("checkInFrequency", 2),
+        "fu": vault_doc.get("checkInUnit", "months"),
+        "gp": vault_doc.get("gracePeriodDays", 3),
+        "notifyProto": vault_doc.get("notifyProto", "ping_then_notify"),
+        "assets": content.get("assets", []),
+        "wishes": content.get("wishes", []),
+        "will": content.get("will", None),
+        "suppDocs": content.get("suppDocs", []),
+        "kin": content.get("kin", []),
+        "v": content.get("v", "face"),
+        "notifySeq": content.get("notifySeq", "in_order"),
+        "saveCount": content.get("saveCount", 0),
+        "log": vault_doc.get("log", []),
     }
 
 
@@ -813,7 +891,9 @@ def get_contacts_to_notify(vault_doc: dict, days_overdue: int) -> list:
     - notify_immediately: Notify all contacts as soon as grace period expires.
     - escalate: Notify one new contact per day (contact #1 on day 0, #2 on day 1, etc.)
     """
-    contacts = vault_doc.get("vault", {}).get("kin", [])
+    # F41: contacts now live in content sub-document.
+    # Fall back to the old vault blob for any docs synced before F41 migration.
+    contacts = vault_doc.get("content", {}).get("kin") or vault_doc.get("vault", {}).get("kin", [])
     if not contacts:
         return []
 
@@ -856,13 +936,21 @@ def run_pulse_scan():
 
         for vault_doc in all_vaults:
             user_id = vault_doc.get("userId", "unknown")
-            vault = vault_doc.get("vault", {})
+            # F41: vault content now lives in 'content' sub-document.
+            # Fall back to old 'vault' blob for any docs synced before F41 migration.
+            vault = vault_doc.get("content") or vault_doc.get("vault", {})
 
             # ── Step 1: Get the last check-in timestamp ───────────────────────
-            last_checkin_ms = vault_doc.get("lastCheckin")
-            if not last_checkin_ms:
+            # F41: lastCheckin may now be a datetime object (new schema) or
+            # an int in milliseconds (old schema) — handle both.
+            last_checkin_raw = vault_doc.get("lastCheckin")
+            if not last_checkin_raw:
                 print(f"  ⏭️  User {user_id}: no check-in recorded yet — skipping")
                 continue
+            if isinstance(last_checkin_raw, datetime):
+                last_checkin_ms = int(last_checkin_raw.timestamp() * 1000)
+            else:
+                last_checkin_ms = int(last_checkin_raw)
 
             # ── Step 2: Calculate when the check-in was due ───────────────────
             fc = vault_doc.get("checkInFrequency", 2)
@@ -964,24 +1052,57 @@ def list_testers(current_user: dict = Depends(get_current_user)):
 
 @app.post("/vault/sync")
 def sync_vault(body: VaultSyncRequest, current_user: dict = Depends(get_current_user)):
-    """Stores the user's full vault blob in MongoDB. Called silently on every save()."""
+    """
+    F41: Stores the vault using a structured MongoDB schema instead of a raw blob.
+    Check-in fields are promoted to the top level so the pulse scanner can
+    index and query them efficiently. Everything else goes into a content sub-document.
+    Called silently on every save() in the frontend.
+    """
+    now = datetime.now(timezone.utc)
+    top_level, content, log = extract_vault_fields(body.vault)
+
     vaults.update_one(
         {"userId": current_user["sub"]},
-        {"$set": {
-            "userId": current_user["sub"],
-            "vault": body.vault,
-            "syncedAt": datetime.utcnow(),
-            "lastCheckin": body.vault.get("lastCheckin"),
-            "checkInFrequency": body.vault.get("fc", 2),
-            "checkInUnit": body.vault.get("fu", "months"),
-            "gracePeriodDays": body.vault.get("gp", 3),
-            "notifyProto": body.vault.get("notifyProto", "ping_then_notify"),
-            "contactCount": len(body.vault.get("kin", [])),
-            "overdueNotificationSent": False,
-        }},
+        {
+            "$set": {
+                "userId": current_user["sub"],
+                **top_level,
+                "content": content,
+                "log": log,
+                "syncedAt": now,
+                "updatedAt": now,
+            },
+            "$setOnInsert": {
+                "createdAt": now,
+                "overdueNotificationSent": False,
+            }
+        },
         upsert=True
     )
-    return {"status": "synced", "syncedAt": datetime.utcnow().isoformat()}
+    return {"ok": True, "syncedAt": now.isoformat()}
+
+
+@app.get("/vault")
+def get_vault(current_user: dict = Depends(get_current_user)):
+    """
+    F41: Returns the user's vault to the frontend on login.
+    The frontend calls this immediately after authentication so it can load
+    the server's version of the vault — making the server the source of truth
+    instead of localStorage. Falls back gracefully if no vault exists yet.
+    """
+    vault_doc = vaults.find_one({"userId": current_user["sub"]})
+
+    if not vault_doc:
+        return {"ok": False, "vault": None}
+
+    vault_blob = reconstruct_vault_blob(vault_doc)
+    synced_at = vault_doc.get("syncedAt")
+
+    return {
+        "ok": True,
+        "vault": vault_blob,
+        "syncedAt": synced_at.isoformat() if synced_at else None,
+    }
 
 @app.post("/checkin")
 def record_checkin(current_user: dict = Depends(get_current_user)):
@@ -1000,9 +1121,10 @@ def record_checkin(current_user: dict = Depends(get_current_user)):
     vaults.update_one(
         {"userId": user_id},
         {"$set": {
-            "lastCheckin": int(now.timestamp() * 1000),
+            "lastCheckin": now,                          # F41: store as datetime (top-level, indexed)
             "syncedAt": now,
             "overdueNotificationSent": False,
+            "updatedAt": now,
         }}
     )
 
@@ -1011,7 +1133,8 @@ def record_checkin(current_user: dict = Depends(get_current_user)):
         print(f"🟢 User {user_id} checked in after overdue — sending all-clear emails")
         user_record = users.find_one({"_id": ObjectId(user_id)})
         owner_name = user_record["name"] if user_record else "The vault holder"
-        contacts = vault_doc.get("vault", {}).get("kin", [])
+        # F41: contacts now in content sub-document; fall back to old vault blob
+        contacts = vault_doc.get("content", {}).get("kin") or vault_doc.get("vault", {}).get("kin", [])
         sent_count = 0
         for contact in contacts:
             success = send_allclear_email(owner_name, contact)
@@ -1067,3 +1190,12 @@ def startup():
     print("🚀 Identity service running")
     scheduler.start()
     print("⏰ Pulse scanner scheduled — runs every hour")
+
+    # F41: Create indexes for vault queries.
+    # These make the hourly pulse scan fast — without them MongoDB does a full
+    # collection scan of every vault every hour. Safe to call every startup;
+    # MongoDB silently skips index creation if the index already exists.
+    vaults.create_index("userId", unique=True)
+    vaults.create_index("lastCheckin")
+    vaults.create_index([("overdueNotificationSent", 1), ("lastCheckin", 1)])
+    print("🗂️  Vault indexes verified")
