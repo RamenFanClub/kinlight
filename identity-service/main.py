@@ -708,31 +708,29 @@ Emergency Exit — Digital Legacy Vault
 This is an automated message. Do not reply to this email.
 """
 
-    # ── F39-4: Generate the PDF and base64-encode it for the email attachment ─
+    # ── F39-4: Generate the PDF and attach it to the email ───────────────────
     pdf_attached = False
     attachments = []
     try:
         pdf_bytes = generate_pdf_for_contact(contact, vault, vault_owner_name)
-        # Base64 encoding converts raw binary (PDF bytes) into a plain-text string
-        # that can safely travel inside a JSON API request to Resend.
-        pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
         safe_name = f"{contact.get('first', 'Contact')}-{contact.get('last', 'Package')}".replace(" ", "-")
+        # Resend's Python SDK expects raw bytes in "content", NOT a base64 string.
+        # The SDK handles encoding internally before sending to the API.
         attachments = [{
             "filename": f"Emergency-Exit-{safe_name}.pdf",
-            "content": pdf_b64,
+            "content": list(pdf_bytes),  # Resend SDK requires a list of ints (byte array)
         }]
         pdf_attached = True
         print(f"  📄 PDF generated for {contact_name} ({len(pdf_bytes):,} bytes)")
     except Exception as pdf_err:
         # If PDF generation fails, we still send the plain-text email.
-        # This is a deliberate fallback — a notification without a PDF is
-        # better than no notification at all.
+        # A notification without a PDF is better than no notification at all.
         print(f"  ⚠️  PDF generation failed for {contact_name}: {pdf_err} — sending email without attachment")
 
     try:
         email_payload = {
             "from": "onboarding@resend.dev",
-            "to": TEST_INBOX,  # ← swap to contact["email"] when going live
+            "to": [TEST_INBOX],  # Resend requires "to" as a list, not a plain string
             "subject": f"[Emergency Exit] Action may be required — {vault_owner_name} has missed a check-in",
             "text": body,
         }
