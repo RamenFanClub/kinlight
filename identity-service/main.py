@@ -893,7 +893,14 @@ def get_contacts_to_notify(vault_doc: dict, days_overdue: int) -> list:
     """
     # F41: contacts now live in content sub-document.
     # Fall back to the old vault blob for any docs synced before F41 migration.
-    contacts = vault_doc.get("content", {}).get("kin") or vault_doc.get("vault", {}).get("kin", [])
+    # IMPORTANT: use explicit None check, not `or` — an empty list [] is falsy
+    # in Python so `[] or fallback` would incorrectly use the fallback even when
+    # the content key exists but the user genuinely has no contacts yet.
+    content_kin = vault_doc.get("content", {}).get("kin")
+    if content_kin is not None:
+        contacts = content_kin
+    else:
+        contacts = vault_doc.get("vault", {}).get("kin", [])
     if not contacts:
         return []
 
@@ -937,8 +944,9 @@ def run_pulse_scan():
         for vault_doc in all_vaults:
             user_id = vault_doc.get("userId", "unknown")
             # F41: vault content now lives in 'content' sub-document.
-            # Fall back to old 'vault' blob for any docs synced before F41 migration.
-            vault = vault_doc.get("content") or vault_doc.get("vault", {})
+            # Explicit None check — empty dict/list is falsy so `or` would incorrectly skip it.
+            content = vault_doc.get("content")
+            vault = content if content is not None else vault_doc.get("vault", {})
 
             # ── Step 1: Get the last check-in timestamp ───────────────────────
             # F41: lastCheckin may now be a datetime object (new schema) or
@@ -1133,8 +1141,10 @@ def record_checkin(current_user: dict = Depends(get_current_user)):
         print(f"🟢 User {user_id} checked in after overdue — sending all-clear emails")
         user_record = users.find_one({"_id": ObjectId(user_id)})
         owner_name = user_record["name"] if user_record else "The vault holder"
-        # F41: contacts now in content sub-document; fall back to old vault blob
-        contacts = vault_doc.get("content", {}).get("kin") or vault_doc.get("vault", {}).get("kin", [])
+        # F41: contacts now in content sub-document; fall back to old vault blob.
+        # Explicit None check — empty list [] is falsy so `or` would incorrectly skip it.
+        content_kin = vault_doc.get("content", {}).get("kin")
+        contacts = content_kin if content_kin is not None else vault_doc.get("vault", {}).get("kin", [])
         sent_count = 0
         for contact in contacts:
             success = send_allclear_email(owner_name, contact)
