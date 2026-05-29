@@ -463,7 +463,6 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 
 | ID | User Story | Priority | Status | Notes |
 |----|-----------|----------|--------|-------|
-| F06 | Dry run notification test | Should | idea | |
 | F07 | Guided onboarding flow | Should | idea | |
 | F08 | Export/backup vault data | Should | idea | |
 | F09 | Auto-generated action checklist in PDF | Should | done | Page 2 of PDF. |
@@ -478,6 +477,7 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 
 | ID | User Story | Priority | Status | Notes |
 |----|-----------|----------|--------|-------|
+| F06 | Dry run notification test — user-facing "send me a test email" button | Could | specified | Partially addressed by /admin/force-overdue + /admin/trigger-pulse admin endpoints and the existing dry-run PDF button in the notification queue modal. Remaining gap: a vault-owner-facing "Send me a test notification" button for production (users can't access /docs). Respec before building. Defer until pre-launch. |
 | F12 | Physical Emergency Access Card (QR code) | Could | idea | |
 | F13 | Advance Care Directive | Could | idea | |
 | F14 | Periodic vault review reminders | Could | idea | |
