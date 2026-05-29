@@ -497,6 +497,20 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 | F38 | Remove Access Level dropdown from contact form | Must | done | |
 | F42 | Palette redesign — linen cream + warm sage | Should | done | Navy/teal replaced. See CSS variable reference above. |
 | F43 | CI/CD — automated pytest on every push | Should | done | GitHub Actions runs 69 tests + frontend sync check. Blocks deploy on failure. |
+| F44 | First-run explainer card — core mechanic | Must | backlog | Show once on first login. Explain the dead man's switch in plain English: add info → add contacts → check in regularly → contacts notified if you stop. Dismiss on tap. Use localStorage flag `ee_onboarded` to ensure it shows only once. |
+| F45 | Fix Home hero text for empty/incomplete state | Must | backlog | "Everything is in order" is misleading when completeness is 0%. Show "Let's get you set up" below ~30% completeness. Only show "Everything is in order" above 70%. Middle state (30–70%): "You're making progress." |
+| F46 | Contacts screen — explain what contacts receive | Must | backlog | Add one-line explainer above the contact list: "These people will receive a full package of your information — assets, wishes, and any personal letters — if your check-in is overdue." |
+| F47 | Fix privacy note — no longer device-only | Must | backlog | Current copy says "stored on this device only" which is false since F41 (data now syncs to Railway/MongoDB). Update to: "Your information is encrypted and stored securely in the cloud." |
+| F48 | Pulse card first-visit explainer | Should | backlog | On first visit (before first check-in), show subtitle under the pulse card: "Check in regularly to confirm you're okay. If you stop, your contacts will be notified." Hide after first check-in. |
+| F49 | Rewrite Notification Protocol labels in plain English | Should | backlog | Replace: "Ping me first, then notify contacts" → "Warn me first (3 reminders, then notify contacts)". "Escalate gradually" → "Notify contacts one at a time, 24 hours apart". Add note clarifying how the user receives the warning. |
+| F50 | Overdue banner — add cancellation reassurance | Should | backlog | Add one calm line to overdue banner: "Don't worry — checking in now will immediately cancel any notifications." Reduces false-alarm anxiety. |
+| F51 | First check-in milestone confirmation | Should | backlog | On the very first check-in only, show richer confirmation: "You're all set. Emergency Exit is now active. We'll remind you to check in again in [X weeks/months]." Use localStorage flag `ee_first_checkin_done` to detect. |
+| F52 | Promote personal letter feature on contact card | Should | backlog | Move "Write personal letter" button higher on contact card — directly below the contact name. Reframe: "Write [Name] a personal message — it'll be the first thing they read." |
+| F53 | Rename "Asset Ledger" to "My Assets" | Could | backlog | "Asset Ledger" is jargon. Update screen title, nav label, and all references. Nav label changes from "Ledger" to "Assets". |
+| F54 | Rename "New Instruction" CTA to "Add a Wish" | Could | backlog | The Wishes screen CTA says "New Instruction" which is cold and clinical. Change to "Add a Wish". |
+| F55 | Label or hide unbuilt WhatsApp notify option | Could | backlog | WhatsApp delivery (F39-9) is not built. Either hide from the dropdown or add "(coming soon)" label so testers don't expect it to work. |
+| F56 | Change grace period default from 3 to 7 days | Could | backlog | 3 days is very short — a user could be in hospital or travelling. Default to 7. Add helper text recommending at least 7 days. |
+| F57 | Remove "tester" language from login screen | Could | backlog | "Sign in with your tester credentials" is internal language. Change to "Sign in to your account" so testers experience realistic copy. |
 
 ### Backend & Infrastructure
 
