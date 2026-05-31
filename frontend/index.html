@@ -23,19 +23,16 @@ async function doLogin(){
     const data=await res.json();
     sessionStorage.setItem('ee_token',data.token);
     sessionStorage.setItem('ee_user',JSON.stringify(data.user));
-    // F41: showApp is now async — waits for vault to load from server before rendering
     await showApp(data.user);
   }catch(e){errEl.textContent='Connection error — please try again.';errEl.classList.add('on');}
 }
 
-// F41: showApp is now async so it can await the server vault fetch before render()
 async function showApp(user){
   document.getElementById('login-wall').classList.add('hidden');
   document.getElementById('logout-btn').classList.add('on');
   const g=document.getElementById('user-greeting');
   g.textContent='Hi, '+user.name.split(' ')[0];
   g.classList.add('on');
-  // F41: load vault from server (falls back to localStorage if server is unreachable)
   await loadFromServer();
   render();
 }
@@ -47,8 +44,6 @@ function doLogout(){
   document.getElementById('logout-btn').classList.remove('on');
   document.getElementById('user-greeting').classList.remove('on');
   document.getElementById('li-pass').value='';
-  // Reset in-memory state. Does NOT wipe localStorage — keeps it as offline cache.
-  // F56: default gp changed from 3 to 7
   S={assets:[],wishes:[],kin:[],will:null,suppDocs:[],lastCheckin:null,fc:2,fu:'months',gp:7,v:'face',notifySeq:'in_order',notifyProto:'ping_then_notify',log:[],saveCount:0};
   render();
 }
@@ -59,17 +54,12 @@ document.addEventListener('DOMContentLoaded',async ()=>{
   });
   const token=sessionStorage.getItem('ee_token');
   const user=sessionStorage.getItem('ee_user');
-  // F41: on page refresh, re-fetch vault from server (keeps cross-device sync fresh)
   if(token&&user){await showApp(JSON.parse(user));}
 });
 
 </script>
 <style>
 :root{
-  /* === PALETTE: Linen Cream + Warm Sage + Warm Charcoal ===
-     navy (#002147) → warm charcoal (#2e2b26)
-     teal (#2d8a7a) → warm sage (#5a7a6e)
-     grey backgrounds → linen cream (#faf6f0, #ede5d8)       */
   --p:#2e2b26;--pc:#3d3a34;--s:#faf6f0;--sl:#ede5d8;--sc:#e5ddd0;--sh:#ddd5c8;--sx:#d5ccbe;--w:#fdf9f4;--os:#2e2b26;--ov:#6b6358;--ov2:#b8b0a0;--ac:#5a7a6e;--al:rgba(90,122,110,.10);--ab:rgba(90,122,110,.22);--sec:#8a7d6e;--scc:#ddd5c8;--er:#ba1a1a;--fh:'Manrope',sans-serif;--fb:'Public Sans',sans-serif;--g:linear-gradient(135deg,#2e2b26 0%,#3d3a34 100%);--cs:0 2px 12px rgba(46,43,38,.07);--cn:0 -4px 20px rgba(46,43,38,.08);--rc:16px;--rb:14px;--rp:9999px;--am:#c47a20;--am-bg:rgba(196,122,32,.08);--am-border:rgba(196,122,32,.25);}
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
 html,body{height:100%;background:#ede8e0;font-family:var(--fb);color:var(--os);-webkit-font-smoothing:antialiased;}
@@ -213,7 +203,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 .empty-state .empty-cta:active{transform:scale(.96);}
 .empty-state .empty-cta .m{font-size:16px;color:var(--s);}
 
-/* F30: Pulse de-emphasis — applied when completeness < 40% */
+/* F30: Pulse de-emphasis */
 #pulse-card{transition:opacity .4s ease, transform .4s ease;}
 #pulse-card.pulse-dimmed{opacity:0.45;transform:scale(0.97);}
 #completeness-card.pulse-dimmed-focus{box-shadow:0 0 0 2px var(--ab), 0 2px 12px rgba(46,43,38,.07);}
@@ -248,7 +238,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 .nq-generate{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:12px 16px;border-radius:10px;border:1.5px solid rgba(186,26,26,.25);background:rgba(186,26,26,.04);cursor:pointer;font-family:var(--fb);font-size:13px;font-weight:700;color:var(--er);transition:all .18s;margin-top:8px;}
 .nq-generate:active{background:rgba(186,26,26,.1);transform:scale(.98);}
 
-/* F05: Reminder banner styling — warm amber tone, distinct from F01 red overdue */
+/* F05: Reminder banner styling */
 .reminder-banner{background:linear-gradient(135deg,#8a6514 0%,#c47a20 100%);border-radius:var(--rc);padding:16px 14px;margin-bottom:14px;box-shadow:0 4px 16px rgba(196,122,32,.20);border-bottom:3px solid rgba(0,0,0,.15);}
 .reminder-banner .rb-header{display:flex;align-items:center;gap:12px;margin-bottom:10px;}
 .reminder-banner .rb-icon{width:40px;height:40px;border-radius:10px;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
@@ -314,7 +304,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
       <div class="login-logo-icon"><span class="m mf" style="font-size:24px;color:#fff;">emergency_home</span></div>
       <span style="font-family:var(--fh);font-weight:800;font-size:20px;color:var(--p);margin-left:4px;">Emergency Exit</span>
     </div>
-    <!-- F57: Updated from "Sign in with your tester credentials to access your vault." -->
     <p class="login-sub">Sign in to your account.</p>
     <div class="login-fi"><label>Username</label><input id="li-user" type="text" placeholder="tester_01" autocomplete="username" autocapitalize="none"/></div>
     <div class="login-fi"><label>Password</label><input id="li-pass" type="password" placeholder="password" autocomplete="current-password"/></div>
@@ -335,7 +324,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
     <!-- HOME SCREEN -->
     <div id="s-home" class="scr on">
 
-      <!-- F01: Overdue alert banner — hidden by default, shown by render() when overdue -->
+      <!-- F01: Overdue alert banner -->
       <div id="overdue-banner" style="display:none;">
         <div class="overdue-banner">
           <div class="ob-header">
@@ -355,7 +344,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
         </div>
       </div>
 
-      <!-- F05: Reminder banner — shown when check-in is due soon but NOT yet overdue -->
+      <!-- F05: Reminder banner -->
       <div id="reminder-banner" style="display:none;">
         <div class="reminder-banner">
           <div class="rb-header">
@@ -372,7 +361,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
         </div>
       </div>
 
-      <!-- F45: Hero text changes based on completeness state + overdue state -->
+      <!-- F45: Hero text — 5 states -->
       <div id="home-hero" style="font-family:var(--fh);font-weight:800;font-size:23px;letter-spacing:-.4px;line-height:1.2;"></div>
 
       <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;margin-bottom:6px;">
@@ -386,7 +375,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
         <span style="font-size:11px;color:var(--sec);font-weight:600;">Your information is encrypted and stored securely in the cloud.</span>
       </div>
 
-      <!-- F44: First-run explainer card — shown once, dismissed via ee_onboarded flag -->
+      <!-- F44: First-run explainer card -->
       <div id="explainer-card" style="display:none;">
         <div class="explainer-card">
           <div class="ex-header">
@@ -438,16 +427,14 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
             </div>
           </div>
         </div>
-        <!-- F30: Contextual hint shown only when pulse is dimmed (vault not ready) -->
         <div id="pulse-hint" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--sh);">
           <div style="font-size:12px;color:var(--sec);line-height:1.5;text-align:center;">Complete your vault below before your first check-in — so your contacts receive everything they need.</div>
         </div>
       </div>
 
-      <!-- F01: Notification queue card — shown on Home only when overdue -->
+      <!-- F01: Notification queue card -->
       <div id="home-nq" style="display:none;"></div>
 
-      <!-- F53: "Asset Ledger" → "My Assets" -->
       <button class="gbtn" onclick="go('ledger')"><div class="ib"><span class="m mf" style="font-size:28px;color:#fff;">shield</span></div><div class="tb"><span class="big">My Assets</span><span class="sm">View all your recorded assets</span></div><span class="m" style="font-size:22px;color:rgba(255,255,255,.4);margin-left:auto;">chevron_right</span></button>
       <div class="qa"><button class="qb qbp" onclick="openM('am')"><span class="m">add_moderator</span>Add Asset</button><button class="qb qbs" onclick="go('wishes')"><span class="m">auto_stories</span>My Wishes</button></div>
 
@@ -464,7 +451,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
       </div>
     </div>
 
-    <!-- LEDGER SCREEN — F53: title updated to "My Assets" -->
+    <!-- LEDGER SCREEN -->
     <div id="s-ledger" class="scr">
       <div class="ph">My Assets</div>
       <div class="ps">A record of what you have, so the right people know where to find it.</div>
@@ -473,7 +460,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
       <div class="ib2"><span class="m mf" style="font-size:17px;color:var(--sec);flex-shrink:0;margin-top:1px;">verified_user</span><p>Your legacy is <strong id="l-pct">0%</strong> documented.</p></div>
     </div>
 
-    <!-- MY WISHES SCREEN — F54: CTA updated to "Add a Wish" -->
+    <!-- MY WISHES SCREEN -->
     <div id="s-wishes" class="scr">
       <div class="ph">My Wishes</div>
       <div class="ps">What matters to you, written down so it's not forgotten.</div>
@@ -535,7 +522,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
           <span class="st"><span class="m mf" style="font-size:17px;color:var(--sec);">group</span>My Contacts</span>
           <button class="ob" onclick="openM('km')"><span class="m" style="font-size:15px;">add</span>Add Contact</button>
         </div>
-        <!-- F46: Explainer — tells users what contacts will receive -->
         <div style="display:flex;align-items:flex-start;gap:8px;background:var(--al);border:1px solid var(--ab);border-radius:10px;padding:10px 12px;margin-bottom:12px;">
           <span class="m mf" style="font-size:15px;color:var(--ac);flex-shrink:0;margin-top:1px;">info</span>
           <span style="font-size:12px;color:var(--ov);line-height:1.5;">These people will receive a full package — your assets, wishes, Will details, and any personal letters — if your check-in is overdue.</span>
@@ -544,7 +530,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
       </div>
     </div>
 
-    <!-- SETTINGS SCREEN — F49: Notification Protocol labels updated -->
+    <!-- SETTINGS SCREEN -->
     <div id="s-config" class="scr">
       <div class="ph">Settings</div>
       <div class="ps">Set how often you check in and what happens if you don't.</div>
@@ -552,14 +538,12 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
       <div class="card"><div class="st" style="margin-bottom:14px;"><span class="m" style="font-size:17px;color:var(--sec);">hourglass_bottom</span>Grace Period</div>
         <div style="background:var(--w);border-radius:12px;padding:14px;">
           <div style="font-size:12px;color:var(--ov);margin-bottom:10px;">How many days after a missed check-in before contacts are alerted?</div>
-          <!-- F56: Helper text recommending at least 7 days -->
           <div style="display:flex;align-items:flex-start;gap:8px;background:var(--al);border:1px solid var(--ab);border-radius:10px;padding:9px 12px;margin-bottom:10px;"><span class="m mf" style="font-size:14px;color:var(--ac);flex-shrink:0;margin-top:1px;">info</span><span style="font-size:12px;color:var(--ov);line-height:1.5;">We recommend at least <strong>7 days</strong> — this gives you enough buffer if you're travelling, unwell, or simply away from your phone.</span></div>
           <div class="cc"><button class="cb" onclick="adjGP(-1)">−</button><div><div class="cv" id="gp-val">7</div><div class="cu">Days</div></div><button class="cb" onclick="adjGP(1)">+</button></div>
         </div>
       </div>
       <div class="card"><div class="st" style="margin-bottom:14px;"><span class="m mf" style="font-size:17px;color:var(--sec);">notifications_active</span>Notification Protocol</div>
         <div style="font-size:12px;color:var(--ov);margin-bottom:12px;">What happens after the grace period expires?</div>
-        <!-- F49: Protocol labels rewritten in plain English -->
         <div class="ri" onclick="setProto('ping_then_notify')" id="proto-1">
           <div class="rl"><span class="m" style="font-size:19px;color:var(--sec);">schedule_send</span><div><span style="font-weight:600;font-size:14px;color:var(--p);display:block;">Warn me first, then notify contacts</span><span style="font-size:11px;color:var(--ov);">3 reminders to me first, then contacts are notified</span></div></div>
           <div class="rd on" id="rp-1"></div>
@@ -580,7 +564,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 
   <nav class="nav">
     <div class="ni on" id="n-home" onclick="go('home')"><span class="m mf">shield</span><span class="l">Home</span></div>
-    <!-- F53: Nav label "Ledger" → "Assets" -->
     <div class="ni" id="n-ledger" onclick="go('ledger')"><span class="m">account_balance</span><span class="l">Assets</span></div>
     <div class="ni" id="n-wishes" onclick="go('wishes')"><span class="m">auto_stories</span><span class="l">Wishes</span></div>
     <div class="ni" id="n-kin" onclick="go('kin')"><span class="m">family_history</span><span class="l">Contact</span></div>
@@ -591,7 +574,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 <!-- MODALS -->
 <div id="am" class="mo"><div class="ms"><div class="mh"></div><div class="mt" id="am-title">Record New Asset</div><input type="hidden" id="am-edit-id" value=""/><div class="fi"><label>Asset Name</label><input id="an" type="text" placeholder="e.g. ANZ Savings Account"/></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;"><div class="fi"><label>Category</label><select id="ac2"><option>Bank account</option><option>Property</option><option>Investment</option><option>Superannuation</option><option>Life insurance</option><option>Vehicle</option><option>Cryptocurrency</option><option>Business</option><option>Personal item</option><option>Digital account</option><option>Other</option></select></div><div class="fi"><label>Est. Value ($)</label><input id="av" type="number" placeholder="0"/></div></div><div class="fi"><label>Details</label><textarea id="adet" placeholder="e.g. Account held at ANZ Bank, BSB 123-456, account ending 4421..."></textarea></div><div class="fi"><label>Beneficiary</label><input id="ab2" type="text" placeholder="e.g. Jane Smith (spouse)"/></div><div class="fi"><label>Notes</label><textarea id="ano" placeholder="Additional instructions..."></textarea></div><div class="mr"><button class="cxb" onclick="closeM()">Cancel</button><button class="cfb" onclick="saveA()" id="am-save-btn">Save Asset</button></div></div></div>
 
-<!-- F54: Modal title kept as "Record a Wish" (already warm/human) -->
 <div id="wm" class="mo"><div class="ms"><div class="mh"></div><div class="mt" id="wm-title">Record a Wish</div><input type="hidden" id="wm-edit-id" value=""/><div class="fi"><label>Category</label><select id="wc2"><option>Funeral & Service</option><option>Medical / end of life care</option><option>Guardian for children</option><option>Pet care</option><option>Business succession</option><option>Digital accounts</option><option>Personal message</option><option>Charitable giving</option><option>Other</option></select></div><div class="fi"><label>Wish</label><input id="wt" type="text" placeholder="e.g. I would like to be cremated"/></div><div class="fi"><label>Details</label><textarea id="wd" placeholder="Add any additional context or instructions..."></textarea></div><div class="fi"><label>Priority</label><select id="wp"><option value="high">High — must be followed</option><option value="medium" selected>Medium — strongly preferred</option><option value="low">Low — would be nice</option></select></div><div class="mr"><button class="cxb" onclick="closeM()">Cancel</button><button class="cfb" onclick="saveW()" id="wm-save-btn">Save Wish</button></div></div></div>
 
 <div id="wlm" class="mo"><div class="ms"><div class="mh"></div><div class="mt">Will Details</div><div class="fi"><label>Will status</label><select id="wl-status"><option value="signed">Signed and legally witnessed</option><option value="draft">Draft — not yet signed</option><option value="none">No Will exists yet</option></select></div><div class="fi"><label>Date signed</label><input id="wl-date" type="date"/></div><div class="fi"><label>Solicitor / law firm</label><input id="wl-solicitor" type="text" placeholder="e.g. Smith & Associates, Melbourne"/></div><div style="font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--sec);margin-bottom:8px;">Where is the original Will stored?</div><div class="fi"><label>Primary location</label><input id="wl-loc1" type="text" placeholder="e.g. Safe at home — study, top shelf"/></div><div class="fi"><label>Secondary location</label><input id="wl-loc2" type="text" placeholder="e.g. Solicitor's office, copy with executor"/></div><div class="fi"><label>Additional notes</label><textarea id="wl-notes" placeholder="Any other instructions for finding or executing the Will..."></textarea></div><div class="mr"><button class="cxb" onclick="closeM()">Cancel</button><button class="cfb" onclick="saveWill()">Save Will details</button></div></div></div>
@@ -620,7 +602,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
   </div>
 </div>
 
-<!-- F01: Notification Queue modal — shows detailed contact delivery queue -->
+<!-- F01: Notification Queue modal -->
 <div id="nqm" class="mo">
   <div class="ms">
     <div class="mh"></div>
@@ -645,7 +627,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 <div id="toast" class="toast"></div>
 
 <script>
-// F56: default gp changed from 3 to 7
 let S={assets:[],wishes:[],kin:[],will:null,suppDocs:[],lastCheckin:null,fc:2,fu:'months',gp:7,v:'face',notifySeq:'in_order',notifyProto:'ping_then_notify',log:[],saveCount:0};
 
 // ─── F41: SERVER-FIRST VAULT LOAD ────────────────────────────────────────────
@@ -818,7 +799,6 @@ const icons={'Bank account':'account_balance','Property':'home','Investment':'tr
 const willStatusLabel={signed:'Signed & witnessed',draft:'Draft — not signed',none:'No Will yet'};
 const notifyIcons={email:'email',sms:'sms',whatsapp:'chat',email_and_sms:'mark_email_read'};
 const notifyLabels={email:'Email',sms:'SMS',whatsapp:'WhatsApp',email_and_sms:'Email + SMS'};
-// F49: protoLabels updated to match plain-English radio labels
 const protoLabels={'ping_then_notify':'Warn me first, then notify contacts','notify_immediately':'Notify contacts immediately','escalate':'Notify contacts one at a time'};
 
 // ─── F01: OVERDUE DETECTION ──────────────────────────────────────────────────
@@ -834,7 +814,7 @@ function getOverdueStatus(){
   return {overdue, daysOverdue, dueDate, graceEnd};
 }
 
-// ─── F05: REMINDER STATUS — "due soon" detection ────────────────────────────
+// ─── F05: REMINDER STATUS ────────────────────────────────────────────────────
 function getReminderStatus(){
   if(!S.lastCheckin) return {dueSoon:false,daysLeft:null,dueDate:null};
   const intervalDays = S.fu==='months' ? (S.fc||2)*30 : (S.fc||2)*7;
@@ -980,17 +960,31 @@ function render(){
     }
   }
 
+  // ─── F45: HERO TEXT — 5 states ───────────────────────────────────────────
+  // Priority order: overdue → low completeness → mid completeness → ready but
+  // not yet checked in → all clear. The "almost there" state is new — it
+  // catches users who have filled their vault but haven't activated the dead
+  // man's switch yet, which was a silent drop-off in early tester sessions.
   const heroEl = document.getElementById('home-hero');
   if(showOverdue){
+    // F01: overdue — highest priority, always red
     heroEl.style.color = 'var(--er)';
     heroEl.innerHTML = 'Action needed.';
   } else if(pct < 30){
+    // New user — vault mostly empty, guide them to start
     heroEl.style.color = 'var(--p)';
     heroEl.innerHTML = 'Let\'s get you <span style="color:var(--ac);">set up.</span>';
   } else if(pct < 70){
+    // In progress — vault partially filled, keep momentum going
     heroEl.style.color = 'var(--p)';
     heroEl.innerHTML = 'You\'re making <span style="color:var(--ac);">progress.</span>';
+  } else if(!S.lastCheckin){
+    // Vault ready but dead man's switch not yet activated — nudge to check in.
+    // Amber used here (not red) to signal "one more step" without alarm.
+    heroEl.style.color = 'var(--am)';
+    heroEl.innerHTML = 'Almost there — <span style="color:var(--am);">now check in.</span>';
   } else {
+    // Vault complete and check-in active — ideal state
     heroEl.style.color = 'var(--p)';
     heroEl.innerHTML = 'Everything is <span style="color:var(--ac);">in order.</span>';
   }
@@ -1021,12 +1015,7 @@ function render(){
       const notifiedCount = Math.min(S.kin.length, daysOverdue + 1);
       detailText = notifiedCount + ' of ' + S.kin.length + ' contact' + (S.kin.length!==1?'s':'') + ' would have been notified so far. Next contact in ' + (24 - (daysOverdue % 1) * 24).toFixed(0) + ' hours. Check in now to cancel.';
     }
-    document.getElementById('overdue-detail').innerHTML =
-      detailText +
-      '<div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.15);font-size:11px;color:rgba(255,255,255,.80);display:flex;align-items:center;gap:5px;">' +
-      '<span class="m mf" style="font-size:13px;">check_circle</span>' +
-      'Checking in now will immediately cancel any notifications.' +
-      '</div>';
+    document.getElementById('overdue-detail').textContent = detailText;
 
     const queue = buildNotificationQueue(daysOverdue);
     const homeNQ = document.getElementById('home-nq');

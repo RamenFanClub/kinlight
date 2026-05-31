@@ -49,7 +49,7 @@ The `index.html` includes a login wall:
 - **Primary colour:** `#2e2b26` (warm charcoal — replaced navy `#002147`)
 - **Primary dark variant:** `#3d3a34`
 - **Accent colour:** `#5a7a6e` (warm sage — replaced teal `#2d8a7a`)
-- **Amber colour:** `#c47a20` (amber — used for F05 "due soon" reminders, unchanged)
+- **Amber colour:** `#c47a20` (amber — used for F05 "due soon" reminders, and F45 "almost there" hero state)
 - **Background:** `#faf6f0` (linen cream — replaced `#f8f9fb`)
 - **Card background:** `#ede5d8` (warm card — replaced `#f2f4f6`)
 - **Card surface:** `#fdf9f4` (warm white — replaced `#ffffff`)
@@ -82,7 +82,7 @@ The `index.html` includes a login wall:
 --sec: #8a7d6e      /* section labels, icons */
 --scc: #ddd5c8      /* secondary badge background */
 --er: #ba1a1a       /* error/overdue red */
---am: #c47a20       /* amber — due soon */
+--am: #c47a20       /* amber — due soon + F45 "almost there" state */
 --am-bg: rgba(196,122,32,.08)
 --am-border: rgba(196,122,32,.25)
 --g: linear-gradient(135deg, #2e2b26 0%, #3d3a34 100%)
@@ -145,7 +145,12 @@ Expected output: `69 passed` — if any fail, fix before pushing.
 ## App Structure — 5 Screens
 
 ### 1. Home (Dashboard)
-- Hero headline: "Everything is in order." (normal) / "Action needed." (overdue — F01)
+- **F45: Hero headline** — 5 states (priority order):
+  1. `"Action needed."` — red, when overdue + has contacts (F01)
+  2. `"Let's get you set up."` — sage accent, completeness < 30%
+  3. `"You're making progress."` — sage accent, completeness 30–69%
+  4. `"Almost there — now check in."` — **amber**, completeness ≥ 70% but no check-in yet (new state)
+  5. `"Everything is in order."` — sage accent, completeness ≥ 70% + checked in
 - Asset + wish count summary with status badge: Active (sage), Due Soon (amber — F05), or Overdue (red — F01)
 - **Privacy note** (F31): Small sage lock icon line below summary — "Your information is encrypted and stored securely in the cloud."
 - **F44: First-run explainer card** — shown once on first login, above the Vitality Pulse card, below the privacy note. Three numbered steps explaining the core mechanic. Dismissed with a tap; sets `ee_onboarded = true` in localStorage permanently.
@@ -161,7 +166,7 @@ Expected output: `69 passed` — if any fail, fix before pushing.
 - Screen ID: `s-home` | Nav ID: `n-home`
 
 ### 2. Asset Ledger
-- Title: "Asset Ledger", subtitle: "A record of what you have, so the right people know where to find it."
+- Title: "My Assets", subtitle: "A record of what you have, so the right people know where to find it."
 - Full-width gradient CTA: "Record New Asset"
 - Assets grouped by category with category icon and item count
 - Per-asset: name, detail snippet, beneficiary, value, edit button, delete button (`.del-btn`)
@@ -171,7 +176,7 @@ Expected output: `69 passed` — if any fail, fix before pushing.
 
 ### 3. My Wishes
 - Title: "My Wishes", subtitle: "What matters to you, written down so it's not forgotten."
-- Full-width gradient CTA: "New Instruction"
+- Full-width gradient CTA: "Add a Wish"
 - **Will & Legal Documents** card — status badge, Will details, supplementary docs
 - **Statement of Wishes** nudge card (F32) — orange accent, shown until SOW is recorded
 - Wishes grouped by category with priority badge (high/medium/low), edit and delete buttons
@@ -203,7 +208,7 @@ Bottom tab bar (5 tabs, rounded top corners):
 | Tab | Icon | Screen ID | Nav ID |
 |-----|------|-----------|--------|
 | Home | `shield` | `s-home` | `n-home` |
-| Ledger | `account_balance` | `s-ledger` | `n-ledger` |
+| Assets | `account_balance` | `s-ledger` | `n-ledger` |
 | Wishes | `auto_stories` | `s-wishes` | `n-wishes` |
 | Contact | `family_history` | `s-kin` | `n-kin` |
 | Settings | `settings_suggest` | `s-config` | `n-config` |
@@ -225,6 +230,7 @@ Active tab: linen cream icon/label on charcoal pill. Inactive: charcoal at 35% o
 - **Delete button (F34):** All delete actions use `.del-btn` CSS class
 - **Settings auto-save (F35):** All Settings controls save immediately on change with toast feedback
 - **First-run explainer (F44):** `.explainer-card` with `.explainer-step` numbered list. Dismissed via `dismissExplainer()` which sets `ee_onboarded = true` in localStorage. `showExplainerIfNew()` called inside `render()` on every render. Smooth fade-out on dismiss.
+- **Hero headline (F45):** 5-state logic in `render()`. Priority: overdue > low pct > mid pct > ready-but-no-checkin (amber) > all clear. The amber "almost there" state catches users who completed their vault but haven't tapped check-in yet.
 
 ---
 
@@ -380,7 +386,7 @@ notes, isTester, createdAt, lastLogin
 | `TestCompletenessLogic` | Completeness score (7 checks) | 6 |
 
 ### Frontend test coverage
-F44 (explainer card) and other frontend features are not covered by the pytest suite — pytest only covers the Python backend. Frontend test coverage requires a browser automation tool (e.g. Playwright). This is tracked as a future infrastructure task. See F58 in the backlog.
+F44, F45, and other frontend features are not covered by the pytest suite — pytest only covers the Python backend. Frontend test coverage requires a browser automation tool (e.g. Playwright). This is tracked as a future infrastructure task. See F58 in the backlog.
 
 ### Adding tests for new features
 When building a new feature, add a new `class TestFeatureName` block to `test_main.py` before implementing. Tests run automatically on every push via GitHub Actions.
@@ -444,7 +450,7 @@ When building a new feature, add a new `class TestFeatureName` block to `test_ma
 
 ## Feature Backlog — User Stories
 
-> **Last groomed:** F56 and F57 implemented and marked done.
+> **Last groomed:** F45 implemented and marked done.
 
 Features are prioritised using MoSCoW: **Must**, **Should**, **Could**, **Won't**
 
@@ -497,13 +503,14 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 | F39-5 | Twilio SMS delivery | Could | specified | SMS with PDF link (not attachment). Requires cloud storage (F59) for PDF hosting. Demoted from Should — email delivery covers the core need during testing phase. |
 | F39-6 | RabbitMQ event bus | Could | specified | Adds retry resilience between scanner and delivery. Can skip initially — scanner calls worker directly. Only needed at scale. Demoted from Should. |
 | F39-9 | WhatsApp delivery via Twilio | Could | idea | Requires Meta Business API approval + F59. Defer until core delivery is stable. |
+| F45 | Hero headline reacts to vault state | Could | done | 5-state logic: overdue (red) → empty (< 30%) → in progress (30–69%) → ready but no check-in yet (amber, "Almost there — now check in.") → all clear. The amber "almost there" state is new — catches users who completed their vault but haven't activated the dead man's switch. |
 | F48 | Pulse card first-visit explainer | Could | backlog | On first visit (before first check-in), show subtitle under pulse card: "Check in regularly to confirm you're okay. If you stop, your contacts will be notified." Hide after first check-in. F44 (done) reduces urgency. |
-| F49 | Rewrite Notification Protocol labels in plain English | Could | backlog | Replace "Ping me first, then notify contacts" → "Warn me first (3 reminders, then notify contacts)". "Escalate gradually" → "Notify contacts one at a time, 24 hours apart". Batch with other copy updates. |
+| F49 | Rewrite Notification Protocol labels in plain English | Could | done | Replace "Ping me first, then notify contacts" → "Warn me first (3 reminders, then notify contacts)". "Escalate gradually" → "Notify contacts one at a time, 24 hours apart". Batch with other copy updates. |
 | F50 | Overdue banner — add cancellation reassurance | Could | backlog | Add one calm line: "Checking in now will immediately cancel any notifications." Reduces false-alarm anxiety. |
 | F51 | First check-in milestone confirmation | Could | backlog | On the very first check-in only, show a richer confirmation: "You're all set. Emergency Exit is now active." Uses localStorage flag `ee_first_checkin_done`. |
 | F52 | Promote personal letter feature on contact card | Could | backlog | Move "Write personal letter" button higher on the contact card. Reframe: "Write [Name] a personal message — it'll be the first thing they read." |
-| F53 | Rename "Asset Ledger" to "My Assets" | Could | backlog | "Asset Ledger" is jargon. Update screen title, nav label, and all references. Nav label: "Ledger" → "Assets". |
-| F54 | Rename "New Instruction" CTA to "Add a Wish" | Could | backlog | "New Instruction" is cold and clinical. Change to "Add a Wish". |
+| F53 | Rename "Asset Ledger" to "My Assets" | Could | done | "Asset Ledger" is jargon. Update screen title, nav label, and all references. Nav label: "Ledger" → "Assets". |
+| F54 | Rename "New Instruction" CTA to "Add a Wish" | Could | done | "New Instruction" is cold and clinical. Change to "Add a Wish". |
 | F55 | Label or hide unbuilt WhatsApp notify option | Could | backlog | WhatsApp delivery (F39-9) is not built. Either hide the option from the contact "Notify via" dropdown or add "(coming soon)" to prevent tester confusion. |
 
 ---
@@ -542,7 +549,7 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 - [ ] Run `python3 -m pytest test_main.py -v` — confirm 69 passed before pushing
 - [ ] `cp index.html frontend/index.html`
 - [ ] `git add -A`
-- [ ] `git commit -m "describe what changed"`
+- [ ] `git commit -m "feat: F45 — 5-state hero headline, amber nudge for vault-ready users"`
 - [ ] `git push`
 - [ ] GitHub Actions runs pytest + sync check ✅
 - [ ] Railway redeploys backend automatically ✅
