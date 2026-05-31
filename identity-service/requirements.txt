@@ -9,3 +9,4 @@ resend
 apscheduler
 reportlab
 requests
+PyJWT
