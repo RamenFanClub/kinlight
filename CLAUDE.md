@@ -428,7 +428,10 @@ When building a new feature, add a new `class TestFeatureName` block to `test_ma
 - `API` constant in JS points to `https://emergency-exit-production.up.railway.app`
 - Login token stored in `sessionStorage` (not localStorage — clears on tab close)
 - Vault sync is silent — never show errors to the user if sync fails
-- **F41 fallback pattern:** always use explicit `None` check when reading from content sub-document: `kin = doc.get("content", {}).get("kin"); contacts = kin if kin is not None else doc.get("vault", {}).get("kin", [])`
+- **F41 fallback pattern:** use `_get_content_or_legacy(doc, key, fallback)` helper — do not inline the None-check pattern again
+- **JS helpers:** use `$(id)` not `document.getElementById(id)`, `pl(n, word)` for plurals, `trunc(s)` for truncation, `initials(k)` for contact initials, `authHeader()` for Bearer token header
+- **JS constants:** lookup tables (`ASSET_ICONS`, `WISH_CATS`, `WISH_ICONS`, `NOTIFY_LABELS`, etc.) live at the top of the script block — do not redeclare them inside `render()` or other functions
+- **JS state reset:** use `S = {...DEFAULT_STATE}` in `doLogout()` — do not hardcode the reset object inline
 
 ---
 
@@ -459,7 +462,7 @@ When building a new feature, add a new `class TestFeatureName` block to `test_ma
 
 ## Feature Backlog — User Stories
 
-> **Last groomed:** F60 implemented and marked done.
+> **Last groomed:** F60 implemented and marked done. Holistic refactor pass completed (CSS dead code removed, JS helpers extracted, main.py helpers consolidated — no functional changes).
 
 Features are prioritised using MoSCoW: **Must**, **Should**, **Could**, **Won't**
 
@@ -554,11 +557,10 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 - [ ] Did anything structural change? Update `CLAUDE.md`
 - [ ] Replace `identity-service/main.py` in VS Code
 - [ ] Replace `identity-service/test_main.py` in VS Code
-- [ ] Update `identity-service/requirements.txt` — replace `python-jose[cryptography]` with `PyJWT`
-- [ ] Run `python3 -m pytest test_main.py -v` — confirm 80 passed before pushing
 - [ ] `cp index.html frontend/index.html`
+- [ ] Run `python3 -m pytest test_main.py -v` — confirm 80 passed before pushing
 - [ ] `git add -A`
-- [ ] `git commit -m "feat: F60 — server-side check-in reminder email to vault holder"`
+- [ ] `git commit -m "..."`
 - [ ] `git push`
 - [ ] GitHub Actions runs pytest + sync check ✅
 - [ ] Railway redeploys backend automatically ✅
