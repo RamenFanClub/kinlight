@@ -43,9 +43,9 @@ APP_URL = "https://ramenfanclub.github.io/emergency-exit/"
 FROM_EMAIL = "Emergency Exit <onboarding@resend.dev>"
 
 client = MongoClient(MONGO_URI) if MONGO_URI else None
-db = client["emergency_exit"] if client else None
-users_col = db["users"] if db else None
-vaults_col = db["vaults"] if db else None
+db = client["emergency_exit"] if client is not None else None
+users_col = db["users"] if db is not None else None
+vaults_col = db["vaults"] if db is not None else None
 
 
 # ─── TIMESTAMP HELPERS ────────────────────────────────────────────────────────
