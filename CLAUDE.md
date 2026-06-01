@@ -468,7 +468,7 @@ When building a new feature, add a new `class TestFeatureName` block to `test_ma
 
 ## Feature Backlog — User Stories
 
-> **Last groomed:** F60 implemented and marked done. Holistic refactor pass completed (CSS dead code removed, JS helpers extracted, main.py helpers consolidated — no functional changes).
+> **Last groomed:** Grooming pass — no features built. Priority order set for next sprint: F55 (hide WhatsApp option — trust risk with active testers) → F51 + F52 together in one commit (first check-in confirmation + promote personal letter) → F48 (pulse card first-visit explainer) → F06 (test notification button) → F08 (vault export) → F58 (frontend test infrastructure). Deferred: F07, F59, F39-5, F39-6, F04.
 
 Features are prioritised using MoSCoW: **Must**, **Should**, **Could**, **Won't**
 
@@ -525,11 +525,11 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 | F48 | Pulse card first-visit explainer | Could | backlog | On first visit (before first check-in), show subtitle under pulse card: "Check in regularly to confirm you're okay. If you stop, your contacts will be notified." Hide after first check-in. F44 (done) reduces urgency. |
 | F49 | Rewrite Notification Protocol labels in plain English | Could | done | Replace "Ping me first, then notify contacts" → "Warn me first (3 reminders, then notify contacts)". "Escalate gradually" → "Notify contacts one at a time, 24 hours apart". Batch with other copy updates. |
 | F50 | Overdue banner — add cancellation reassurance | Could | done | Add one calm line: "Checking in now will immediately cancel any notifications." Reduces false-alarm anxiety. |
-| F51 | First check-in milestone confirmation | Could | backlog | On the very first check-in only, show a richer confirmation: "You're all set. Emergency Exit is now active." Uses localStorage flag `ee_first_checkin_done`. |
-| F52 | Promote personal letter feature on contact card | Could | backlog | Move "Write personal letter" button higher on the contact card. Reframe: "Write [Name] a personal message — it'll be the first thing they read." |
+| F51 | First check-in milestone confirmation | Could | backlog | On the very first check-in only, show a richer confirmation: "You're all set. Emergency Exit is now active." Uses localStorage flag `ee_first_checkin_done`. **Implement together with F52 in one commit.** |
+| F52 | Promote personal letter feature on contact card | Could | backlog | Move "Write personal letter" button higher on the contact card. Reframe: "Write [Name] a personal message — it'll be the first thing they read." **Implement together with F51 in one commit.** |
 | F53 | Rename "Asset Ledger" to "My Assets" | Could | done | "Asset Ledger" is jargon. Update screen title, nav label, and all references. Nav label: "Ledger" → "Assets". |
 | F54 | Rename "New Instruction" CTA to "Add a Wish" | Could | done | "New Instruction" is cold and clinical. Change to "Add a Wish". |
-| F55 | Label or hide unbuilt WhatsApp notify option | Could | backlog | WhatsApp delivery (F39-9) is not built. Either hide the option from the contact "Notify via" dropdown or add "(coming soon)" to prevent tester confusion. |
+| F55 | Label or hide unbuilt WhatsApp notify option | Could | backlog | WhatsApp delivery (F39-9) is not built. Either hide the option from the contact "Notify via" dropdown or add "(coming soon)" to prevent tester confusion. **Do this first — a non-functional option is a trust risk with active testers.** |
 
 ---
 
