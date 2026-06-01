@@ -366,7 +366,7 @@ function buildTests(persona) {
       const res = await apiFetch('/auth/me', 'GET', null, token);
       if (!res.ok) return { pass: false, detail: `HTTP ${res.status}` };
       const data = await res.json();
-      return { pass: !!data.username, detail: `User: ${data.name || data.username}` };
+      return { pass: !!(data.user && data.user.username), detail: `User: ${data.user?.name || data.user?.username}` };
     }
   });
 
