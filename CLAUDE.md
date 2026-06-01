@@ -432,6 +432,8 @@ When building a new feature, add a new `class TestFeatureName` block to `test_ma
 - **JS helpers:** use `$(id)` not `document.getElementById(id)`, `pl(n, word)` for plurals, `trunc(s)` for truncation, `initials(k)` for contact initials, `authHeader()` for Bearer token header
 - **JS constants:** lookup tables (`ASSET_ICONS`, `WISH_CATS`, `WISH_ICONS`, `NOTIFY_LABELS`, etc.) live at the top of the script block — do not redeclare them inside `render()` or other functions
 - **JS state reset:** use `S = {...DEFAULT_STATE}` in `doLogout()` — do not hardcode the reset object inline
+- **PyMongo objects:** always use `if db is not None` / `if client is not None` — never `if db` or `if client`. Newer PyMongo raises `NotImplementedError` on boolean checks of Database objects
+- **Script tag in `<head>`:** the `API` constant lives in its own `<script>` block that must be closed with `</script>` before the `<style>` block opens. Any rewrite of the `<head>` section must preserve this — missing it causes the entire CSS to be parsed as JavaScript and breaks the login screen silently
 
 ---
 
@@ -457,6 +459,8 @@ When building a new feature, add a new `class TestFeatureName` block to `test_ma
 - Do not use `or` for fallback when reading `content.kin` — empty list `[]` is falsy and would silently fall through. Use explicit `None` check.
 - Do not push without running `python3 -m pytest test_main.py -v` first (or rely on GitHub Actions to catch it)
 - Do not store one-time UI flags (like `ee_onboarded`) inside the `ee_v3` blob — keep them as separate localStorage keys so they survive vault resets
+- Do not use `if db` or `if client` for PyMongo objects — always compare with `is not None`
+- Do not rewrite the `<head>` section without verifying `</script>` appears before `<style>` — missing this breaks the login screen with no visible error
 
 ---
 

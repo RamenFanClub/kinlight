@@ -736,13 +736,14 @@ async function loadFromServer(){
   try{const d=localStorage.getItem('ee_v3');if(d)S={...S,...JSON.parse(d)};}catch(e){}
 }
 
-// ─── F44: FIRST-RUN EXPLAINER ────────────────────────────────────────────────
-
-
+// ─── PERSISTENCE — SAVE ───────────────────────────────────────────────────────
+function save(){
   try{localStorage.setItem('ee_v3',JSON.stringify(S));}catch(e){}
   syncVault();
   render();
 }
+
+// ─── F44: FIRST-RUN EXPLAINER ────────────────────────────────────────────────
 
 async function syncVault(){
   if(!sessionStorage.getItem('ee_token'))return;
