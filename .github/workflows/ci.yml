@@ -74,3 +74,46 @@ jobs:
             diff index.html frontend/index.html
             exit 1
           fi
+
+  # ─── JOB 3: FRONTEND BROWSER TESTS (PLAYWRIGHT) ───────────────────────────
+  # NEW (F58): Runs Playwright tests against index.html in a real browser.
+  # Tests cover: login flow, hero headline states, onboarding card,
+  # completeness scoring, navigation, and copy verification.
+  #
+  # HOW IT WORKS:
+  # 1. Installs Node.js + npm dependencies (Playwright + serve)
+  # 2. Installs Chromium browser
+  # 3. "serve" spins up a local web server on port 3000 serving index.html
+  # 4. Playwright opens Chromium, navigates to localhost:3000, runs tests
+  # 5. API calls are mocked (intercepted) so no Railway backend needed
+  frontend-tests:
+    name: Frontend Tests (Playwright)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install npm dependencies
+        run: |
+          npm install --save-dev @playwright/test
+          npm install --save-dev serve
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        run: npx playwright test --reporter=list
+
+      - name: Upload test report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
