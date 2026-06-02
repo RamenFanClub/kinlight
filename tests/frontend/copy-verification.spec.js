@@ -10,8 +10,8 @@ test.describe('Copy & Label Verification', () => {
 
   test('Assets screen title says "My Assets" (F53)', async ({ page }) => {
     await page.click('#n-ledger');
-    // .st is the screen title class in the app
-    await expect(page.locator('#s-ledger .st').first()).toContainText('My Assets');
+    // Screen titles use class .ph (page heading) in this app
+    await expect(page.locator('#s-ledger .ph')).toContainText('My Assets');
   });
 
   test('Nav label for assets says "Assets" not "Ledger" (F53)', async ({ page }) => {
@@ -38,9 +38,8 @@ test.describe('Copy & Label Verification', () => {
 
   test('Contacts screen shows what contacts will receive (F46)', async ({ page }) => {
     await page.click('#n-kin');
-    // The ib2 info box on the contacts screen describes the full package
-    const infoBox = page.locator('#s-kin .ib2');
-    const text = await infoBox.textContent();
+    // The info text sits in an inline-styled div, so we check the whole screen text
+    const text = await page.locator('#s-kin').textContent();
     expect(text.toLowerCase()).toContain('full package');
   });
 
