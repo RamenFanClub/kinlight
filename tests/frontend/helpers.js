@@ -86,7 +86,7 @@ async function loginViaUI(page, username = 'tester_01', password = 'Benny#07') {
   await page.fill('#li-pass', password);
   await page.click('.login-btn');
   // Wait for the login wall to disappear
-  await page.waitForSelector('#login-wall.hidden', { timeout: 5000 });
+  await page.waitForSelector('#login-wall', { state: 'hidden', timeout: 5000 });
 }
 
 /**
