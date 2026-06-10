@@ -468,7 +468,7 @@ When building a new feature, add a new `class TestFeatureName` block to `test_ma
 
 ## Feature Backlog — User Stories
 
-> **Last groomed:** Grooming pass — no features built. Priority order set for next sprint: F55 (hide WhatsApp option — trust risk with active testers) → F51 + F52 together in one commit (first check-in confirmation + promote personal letter) → F48 (pulse card first-visit explainer) → F06 (test notification button) → F08 (vault export) → F58 (frontend test infrastructure). Deferred: F07, F59, F39-5, F39-6, F04.
+> **Last groomed:** June 2026 — end-to-end UX review (see `ux-review-emergency-exit.md`). Added F61–F71. F55 elevated from Could to Must (moved to Must table). Three themes drove the new items: (1) false confidence — app can imply protection that doesn't exist (F61, F65); (2) broken promises — UI offers things that aren't built (F55, F64, F70); (3) recipient journey — delivery email is anonymous and untrusted (F62, F63, F68). Priority order for next sprint: F55 (3-line fix, do first) → F61 + F62 as one batch → F63 → F64 (decide rename vs build first) → F65. Pre-expansion gates: F66, F67, F68. Deferred unchanged: F07, F59, F39-5, F39-6, F04.
 
 Features are prioritised using MoSCoW: **Must**, **Should**, **Could**, **Won't**
 
@@ -486,6 +486,11 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 | F04 | Data encrypted at rest and in transit | Must | specified | Transit: HTTPS on Railway (done). At rest: MongoDB Atlas handles server-side encryption (done). **Remaining gap:** end-to-end encryption of vault content *before* it reaches the server — so Railway/MongoDB cannot read plaintext. This is a significant architectural change; defer to post-MVP. |
 | F05 | Reminders when check-in is due | Must | done | Amber banner + pulse card amber state for client-side reminder. Server-side email reminder now live via F60. |
 | F40 | User authentication for testing | Must | done | Login wall added. Username + password. JWT token in sessionStorage. |
+| F55 | Hide unbuilt SMS/WhatsApp/Email+SMS notify options | Must | backlog | **Elevated from Could (UX review Jun 2026).** Remove the three unbuilt options from the contact "Notify via" dropdown (delete `<option>` tags + prune `NOTIFY_LABELS`/`NOTIFY_ICONS` if unused). A visible option that silently does nothing is a trust failure. Smallest item on the list — do first. |
+| F61 | Require a valid email address per contact | Must | idea | UX review 1.1: `saveK()` only validates first name — a contact with no email passes validation, shows on the list, and silently fails on delivery day. Validate email format on save; block save or show a clear "can't be reached" warning pill on the contact card. Closes the core silent-failure gap. |
+| F62 | Vault holder's name in all delivery emails + PDF | Must | idea | UX review 4.1/4.4: notification email body, subject, all-clear email, and both PDF intros (ReportLab + jsPDF) say "the vault holder" — recipient can't tell who it's about. Pass `user["name"]` through `send_notification_email`, `send_allclear_email`, and both PDF generators. |
+| F63 | Nomination email when a contact is added | Must | idea | UX review 4.3 — **highest-value fix.** "[Name] has added you as a trusted contact in Emergency Exit — no action needed." Verifies the address while the holder is alive (typos surface immediately, not on delivery day), pre-warms recipient trust so the eventual delivery email isn't from a stranger, and surfaces consent. New backend endpoint triggered on contact save; debounce so edits don't re-send. |
+| F64 | Fix "Warn me first" protocol promise mismatch | Must | idea | UX review 2.2: backend `ping_then_notify` just waits 3 extra days after grace expiry — no warning email is ever sent to the holder once overdue (F60 reminder only fires pre-due; scanner skips reminders when overdue). **Decision needed:** (A) build escalating warning emails during the overdue window, or (B) rename the label to match behaviour ("Wait 3 extra days before notifying contacts"). B is a copy change and acceptable short-term; A is the right long-term answer. |
 
 ---
 
@@ -493,7 +498,7 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 
 | ID | User Story | Priority | Status | Notes |
 |----|-----------|----------|--------|-------|
-| F07 | Guided onboarding flow | Should | idea | F44 (first-run explainer card, done) covers the immediate gap. A full multi-step onboarding flow is a post-validation investment. Spec before building. |
+| F07 | Guided onboarding flow | Should | idea | F44 (first-run explainer card, done) covers the immediate gap. A full multi-step onboarding flow is a post-validation investment. Spec before building. UX review Jun 2026: F63 + F65 substantially reduce the case for full onboarding — a minimal "protection checklist" (add a contact ✓ → check in once ✓) gets most of the value for a fraction of the build. Keep deferred. |
 | F08 | Export/backup vault data | Should | done | User-facing JSON or PDF export of their own data. Useful for trust and portability. Spec before building. |
 | F41 | Migrate vault data from localStorage to MongoDB | Should | done | Server-first load implemented. GET /vault returns vault on login. localStorage kept as offline cache. Structured MongoDB schema with indexes. 80 automated tests. |
 | F43 | CI/CD — automated pytest on every push | Should | done | GitHub Actions runs 80 tests + frontend sync check. Blocks deploy on failure. |
@@ -502,6 +507,10 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 | F58 | Frontend test coverage infrastructure | Should | done | pytest only covers the Python backend. Set up Playwright or similar browser automation tool to test client-side logic (ee_onboarded flag, explainer card, completeness score, overdue detection). Hard gate before production launch. |
 | F59 | Cloud storage for file uploads | Should | idea | Actual file upload (not just location recording) requires secure cloud storage (e.g. S3-compatible). This is the dependency that blocks SMS (F39-5) and WhatsApp (F39-9), which need a hosted PDF URL rather than an email attachment. Spec before building. |
 | F60 | Server-side reminder delivery | Should | done | Proactive email sent to vault holder when check-in is within 25% of interval (mirrors F05 frontend threshold). Guarded by `reminderSent` flag on vault document — resets on each check-in so reminder fires once per cycle. New admin endpoint `POST /admin/force-reminder` for testing. 11 new pytest tests added (80 total). |
+| F65 | "Not active yet" state before first check-in | Should | idea | UX review 1.3: status badge shows "Active" and hero can read "You're making progress" when `lastCheckin` is null — but the switch isn't armed; nothing will ever be delivered. Badge should read "Not active — check in to start" before first check-in, and hero state 4 ("Almost there — now check in") should fire whenever contacts exist regardless of completeness %. |
+| F66 | Password reset / account recovery | Should | idea | UX review 1.4: a locked-out user cannot check in → contacts receive a false death notification. This is false-alarm prevention, not an auth nicety. **Pre-expansion gate** — must exist before growing the tester group. Email-based reset link via Resend. |
+| F67 | One-tap check-in link in reminder email | Should | idea | UX review 2.1: sessionStorage token means every check-in requires a fresh login — exactly where check-ins die for the target audience. Preferred: signed, expiring token URL in the F60 reminder email that checks in without login. Cheaper alternative: persistent login token in localStorage with expiry. Biggest single reducer of false alarms. |
+| F68 | Custom verified sending domain on Resend | Should | idea | UX review 4.2: emails currently send from `onboarding@resend.dev` (sandbox) — delivery email reads as phishing at the worst possible moment. Already noted in learnings as pre-live; formalised here and **elevated to pre-expansion gate.** Pairs with F63. |
 
 ---
 
@@ -529,7 +538,10 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 | F52 | Promote personal letter feature on contact card | Could | done | Move "Write personal letter" button higher on the contact card. Reframe: "Write [Name] a personal message — it'll be the first thing they read." **Implement together with F51 in one commit.** |
 | F53 | Rename "Asset Ledger" to "My Assets" | Could | done | "Asset Ledger" is jargon. Update screen title, nav label, and all references. Nav label: "Ledger" → "Assets". |
 | F54 | Rename "New Instruction" CTA to "Add a Wish" | Could | done | "New Instruction" is cold and clinical. Change to "Add a Wish". |
-| F55 | Label or hide unbuilt WhatsApp notify option | Could | backlog | WhatsApp delivery (F39-9) is not built. Either hide the option from the contact "Notify via" dropdown or add "(coming soon)" to prevent tester confusion. **Do this first — a non-functional option is a trust risk with active testers.** |
+| F55 | *(moved to Must Have — see above)* | — | — | Elevated by UX review Jun 2026. |
+| F69 | Settings clarity — "Check in every" + next-due date | Could | idea | UX review 2.3/2.4: rename "Check-in Frequency / Custom Interval" to "Check in every"; show "Next check-in due: [date]" below the stepper so the consequence is visible. Optional: gentle inline warning when frequency + grace combine to < 14 days (false-alarm risk). |
+| F70 | Hide/label Verification setting; rename "dry run" button | Could | idea | UX review 3.1/3.2: FaceID/Biometrics setting is decorative (no web implementation) — hide or mark "(coming soon)". Rename "Generate all packages (dry run)" → "Preview all packages (nothing is sent)". Copy-only changes; batch together. |
+| F71 | Login screen one-line value prop | Could | idea | UX review 1.5: login screen gives a new visitor no idea what the app is. One line under the logo. Defer until self-signup exists. |
 
 ---
 
