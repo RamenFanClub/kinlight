@@ -45,7 +45,7 @@ test.describe('Notification Queue (F01)', () => {
     await loginViaUI(page);
     await page.locator('#home-nq button, #home-nq [onclick*="nqm"]').first().click();
     const text = await page.locator('#nq-proto-label').textContent();
-    expect(text).toContain('Warn me first');
+    expect(text).toContain('Wait 3 extra days');
   });
 
 });

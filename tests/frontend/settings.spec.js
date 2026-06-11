@@ -51,7 +51,7 @@ test.describe('Settings', () => {
 
   test('notification protocol options are in plain English (F49)', async ({ page }) => {
     const text = await page.locator('#s-config').textContent();
-    expect(text).toContain('Warn me first');
+    expect(text).toContain('Wait 3 extra days');
     expect(text).toContain('Notify contacts immediately');
     expect(text).toContain('one at a time');
   });
