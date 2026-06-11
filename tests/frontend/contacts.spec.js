@@ -45,6 +45,7 @@ test.describe('Contacts CRUD', () => {
     expect(parseInt(initialPct)).toBe(0);
     await page.locator('#s-kin .ob').click();
     await page.fill('#kf', 'Jane');
+    await page.fill('#ke', 'jane@example.com');
     await page.locator('#km').getByText('Add Contact').last().click();
     await page.click('#n-home');
     const newPct = await page.locator('#cp-lbl').textContent();

@@ -302,13 +302,13 @@ To change your frequency, open Settings in the app.
     return sent
 
 
-def send_notification_email(contact: dict, vault_doc: dict) -> bool:
+def send_notification_email(contact: dict, vault_doc: dict, holder_name: str = "the vault holder") -> bool:
     """Send overdue notification email with PDF attachment to a contact."""
     first = contact.get("first", "")
     last = contact.get("last", "")
     email = contact.get("email", "")
 
-    pdf_bytes = generate_pdf_for_contact(contact, vault_doc)
+    pdf_bytes = generate_pdf_for_contact(contact, vault_doc, holder_name)
     attachment = {
         "filename": f"Emergency-Exit-{first}-{last}.pdf",
         "content": base64.b64encode(pdf_bytes).decode("utf-8"),
@@ -316,9 +316,9 @@ def send_notification_email(contact: dict, vault_doc: dict) -> bool:
 
     body = f"""Dear {first},
 
-You are receiving this because you have been nominated as a trusted contact in Emergency Exit.
+You are receiving this because you have been nominated as a trusted contact by {holder_name} in Emergency Exit.
 
-The vault holder has not confirmed their check-in within the required period. Attached is their emergency package — please review it carefully.
+{holder_name} has not confirmed their check-in within the required period. Attached is their emergency package — please review it carefully.
 
 This package includes their recorded assets, wishes, Will details, and any personal letters they have written for you.
 
@@ -326,20 +326,20 @@ If you believe this has been sent in error, please disregard this message.
 
 The Emergency Exit team
 """
-    sent = _send_email(email, f"Important: Emergency Exit package for {first} {last}", body, attachment)
+    sent = _send_email(email, f"Important: Emergency Exit package from {holder_name}", body, attachment)
     if sent:
         print(f"Notification sent to {first} at {email}")
     return sent
 
 
-def send_allclear_email(contact: dict) -> bool:
+def send_allclear_email(contact: dict, holder_name: str = "the vault holder") -> bool:
     """Send a recovery email when vault holder checks in after being overdue."""
     first = contact.get("first", "")
     email = contact.get("email", "")
 
     body = f"""Dear {first},
 
-Good news — the vault holder has checked in and confirmed they are okay.
+Good news — {holder_name} has checked in and confirmed they are okay.
 
 Any previous notifications about their Emergency Exit vault can be disregarded. No action is required from you at this time.
 
@@ -347,7 +347,7 @@ Thank you for being a trusted contact.
 
 The Emergency Exit team
 """
-    sent = _send_email(email, "All clear — Emergency Exit update", body)
+    sent = _send_email(email, f"All clear — {holder_name} is okay", body)
     if sent:
         print(f"All-clear sent to {first} at {email}")
     return sent
@@ -355,7 +355,7 @@ The Emergency Exit team
 
 # ─── PDF GENERATION ───────────────────────────────────────────────────────────
 
-def generate_pdf_for_contact(contact: dict, vault_doc: dict) -> bytes:
+def generate_pdf_for_contact(contact: dict, vault_doc: dict, holder_name: str = "the vault holder") -> bytes:
     """Generate a PDF package for a single contact. Returns raw bytes."""
     content = vault_doc.get("content", {})
     assets    = content.get("assets") or []
@@ -397,6 +397,7 @@ def generate_pdf_for_contact(contact: dict, vault_doc: dict) -> bytes:
     story = [
         Paragraph("Emergency Exit", styles["heading"]),
         Paragraph(f"Prepared for {first} {last}", styles["sub"]),
+        Paragraph(f"From {holder_name}", styles["sub"]),
         Paragraph(f"Generated {datetime.now().strftime('%-d %B %Y')}", styles["sub"]),
         HRFlowable(width="100%", thickness=1, color=colors.HexColor("#e0e0e0")),
         Spacer(1, 12),
@@ -484,11 +485,12 @@ def run_pulse_scan():
         if overdue:
             already_notified = vault_doc.get("overdueNotificationSent", False)
             proto = vault_doc.get("notifyProto", "ping_then_notify")
+            holder_name = user.get("name", "the vault holder")
 
             if not already_notified or proto == "escalate":
                 contacts = get_contacts_to_notify(vault_doc, days_overdue)
                 for contact in contacts:
-                    send_notification_email(contact, vault_doc)
+                    send_notification_email(contact, vault_doc, holder_name)
                 if contacts and proto != "escalate":
                     vaults_col.update_one(
                         {"_id": vault_doc["_id"]},
@@ -621,9 +623,10 @@ def checkin(current_user: dict = Depends(get_current_user)):
 
     allclear_count = 0
     if was_overdue and existing:
+        holder_name = current_user.get("name", "the vault holder")
         contacts = existing.get("content", {}).get("kin") or []
         for contact in contacts:
-            if send_allclear_email(contact):
+            if send_allclear_email(contact, holder_name):
                 allclear_count += 1
 
     return {
