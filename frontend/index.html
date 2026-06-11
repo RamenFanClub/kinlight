@@ -554,7 +554,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
       <div class="card"><div class="st" style="margin-bottom:14px;"><span class="m mf" style="font-size:17px;color:var(--sec);">notifications_active</span>Notification Protocol</div>
         <div style="font-size:12px;color:var(--ov);margin-bottom:12px;">What happens after the grace period expires?</div>
         <div class="ri" onclick="setProto('ping_then_notify')" id="proto-1">
-          <div class="rl"><span class="m" style="font-size:19px;color:var(--sec);">schedule_send</span><div><span style="font-weight:600;font-size:14px;color:var(--p);display:block;">Warn me first, then notify contacts</span><span style="font-size:11px;color:var(--ov);">3 reminders to me first, then contacts are notified</span></div></div>
+          <div class="rl"><span class="m" style="font-size:19px;color:var(--sec);">schedule_send</span><div><span style="font-weight:600;font-size:14px;color:var(--p);display:block;">Wait 3 extra days, then notify contacts</span><span style="font-size:11px;color:var(--ov);">Contacts are notified 3 days after your grace period expires</span></div></div>
           <div class="rd on" id="rp-1"></div>
         </div>
         <div class="ri" onclick="setProto('notify_immediately')" id="proto-2">
@@ -626,7 +626,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
     </div>
     <div style="margin-bottom:12px;">
       <div style="font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--sec);margin-bottom:4px;">Active Protocol</div>
-      <div style="font-family:var(--fh);font-size:15px;font-weight:700;color:var(--p);" id="nq-proto-label">Warn me first, then notify contacts</div>
+      <div style="font-family:var(--fh);font-size:15px;font-weight:700;color:var(--p);" id="nq-proto-label">Wait 3 extra days, then notify contacts</div>
     </div>
     <div id="nq-full-list"></div>
     <button class="nq-generate" onclick="generateAllPDFs()" style="margin-bottom:12px;"><span class="m" style="font-size:16px;">picture_as_pdf</span>Generate all packages (dry run)</button>
@@ -671,7 +671,7 @@ const WILL_STATUS_LABELS = {signed:'Signed & witnessed',draft:'Draft — not sig
 const NOTIFY_ICONS  = {email:'email',sms:'sms',whatsapp:'chat',email_and_sms:'mark_email_read'};
 const NOTIFY_LABELS = {email:'Email',sms:'SMS',whatsapp:'WhatsApp',email_and_sms:'Email + SMS'};
 const PROTO_LABELS  = {
-  ping_then_notify:'Warn me first, then notify contacts',
+  ping_then_notify:'Wait 3 extra days, then notify contacts',
   notify_immediately:'Notify contacts immediately',
   escalate:'Notify contacts one at a time'
 };
