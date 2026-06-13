@@ -14,7 +14,7 @@ test.describe('Login Flow', () => {
   });
 
   test('login subtitle says "Sign in to your account." (F57)', async ({ page }) => {
-    const subtitle = page.locator('.login-sub');
+    const subtitle = page.locator('#lv-login .login-sub');
     await expect(subtitle).toHaveText('Sign in to your account.');
   });
 
