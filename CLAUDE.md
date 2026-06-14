@@ -47,7 +47,7 @@ The `index.html` includes a login wall:
   - **Code still says "Emergency Exit"** until the rename ships. Implementation tracked as **F72** (see backlog). Sequence F72 *before* F63's nomination email reaches new contacts, so the first email a contact ever receives comes from Kinlight, not Emergency Exit.
   - **✅ `kinlight.app` purchased** (Cloudflare Registrar, June 2026) — primary domain confirmed.
   - **Remaining verification (Anggi's action):** IP Australia TM Checker (ipaustralia.gov.au, free, 5 min) + ASIC business-name search (abr.business.gov.au, free). `kinlight.com.au` available once ABN is issued — register via VentraIP.
-  - **Social handles to claim:** @kinlight on Instagram + X (tracked as F73).
+  - **Social handles:** @kinlight_app on X ✅ · @kinlight.app on Instagram ✅ (both June 2026 — @kinlight was taken on X).
   - **Intended sender address:** `hello@kinlight.app` — not active until Resend verified domain configured in F72.
   - **Meaning:** *kin* (who you protect) + *light* (a light kept on for them). A kinlight is the lamp a keeper tends so their people can find their way home safely.
   - **Tagline (primary):** "A light left on for the people you love." Short form: "The light stays on."
@@ -510,7 +510,7 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 
 ---
 
-| F73 | Claim @kinlight social handles | Should | idea | Claim @kinlight on Instagram and X (Twitter) before public launch to prevent squatting. Free, takes 10 min. Do at same time as or immediately after F72 ships. |
+| F73 | Claim @kinlight social handles | Should | done | X: @kinlight_app ✅ · Instagram: @kinlight.app ✅ (both June 2026). |
 | F74 | Register kinlight.com.au | Should | idea | Australian ccTLD builds local trust. Requires ABN (apply at abr.gov.au if not yet issued). Register via VentraIP once ABN confirmed. Redirects to kinlight.app. |
 | F75 | IP Australia trademark search + optional filing | Should | idea | Run "Kinlight" through TM Checker at ipaustralia.gov.au (free, 5 min) to confirm no class-9/42/45 conflicts. Filing (~$330/class) not urgent pre-launch but worth scheduling post-revenue. |
 | F76 | ASIC business name registration | Should | idea | Register "Kinlight" as a business name with ASIC (requires ABN). Confirms no Australian trading-name conflict and protects the name locally. Fee ~$39/yr. |
