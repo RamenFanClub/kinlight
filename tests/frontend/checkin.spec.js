@@ -91,7 +91,7 @@ test.describe('Check-in State & UI (F01, F51, F30)', () => {
     await page.waitForSelector('#home-hero', { timeout: 8000 });
 
     await expect(page.locator('#overdue-banner')).toBeHidden();
-    await expect(page.locator('#home-hero')).toContainText('in order');
+    await expect(page.locator('#home-hero')).toContainText('Your light is on');
   });
 
 });

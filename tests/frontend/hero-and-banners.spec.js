@@ -38,10 +38,10 @@ test.describe('Hero Headline States (F45)', () => {
     await expect(page.locator('#home-hero')).toContainText('Almost there');
   });
 
-  test('complete vault with check-in shows "Everything is in order."', async ({ page }) => {
+  test('complete vault with check-in shows "Your light is on."', async ({ page }) => {
     await setupPage(page, { vault: buildFullVault() });
     await loginViaUI(page);
-    await expect(page.locator('#home-hero')).toContainText('in order');
+    await expect(page.locator('#home-hero')).toContainText('Your light is on');
   });
 
   test('overdue vault with contacts shows red "Action needed."', async ({ page }) => {

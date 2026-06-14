@@ -27,10 +27,10 @@ test.describe('Home Summary & Activity Log', () => {
     await expect(page.locator('#d-sum')).toContainText('2 assets');
   });
 
-  test('status badge shows "Active" for normal vault', async ({ page }) => {
+  test('status badge shows "Light on" for normal vault', async ({ page }) => {
     await setupPage(page, { vault: buildFullVault() });
     await loginViaUI(page);
-    await expect(page.locator('#status-badge')).toContainText('Active');
+    await expect(page.locator('#status-badge')).toContainText('Light on');
   });
 
   test('status badge shows "Overdue" when overdue', async ({ page }) => {
