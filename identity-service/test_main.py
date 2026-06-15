@@ -24,6 +24,10 @@ from main import (
     is_reset_valid,
     is_password_acceptable,
     send_reset_email,
+    should_send_warning,
+    should_notify_contacts,
+    send_warning_email,
+    send_contacts_notified_email,
 )
 
 
@@ -752,3 +756,105 @@ class TestPasswordReset:
         user = {"name": "Sandra", "username": "tester_05", "email": "sandra@example.com"}
         with patch("main.requests.post", side_effect=Exception("Network error")):
             assert send_reset_email(user, "tok123") is False
+
+
+# ─── F64-2: ESCALATING WARNING EMAILS ────────────────────────────────────────
+
+class TestWarningLogic:
+    """
+    Tests for F64-2: escalating warning emails during the overdue window.
+    Warnings fire on day 1 and day 2 for ping_then_notify protocol only.
+    Contacts are notified on day 3+.
+    """
+
+    def _vault(self, proto="ping_then_notify", days_overdue=1, warning_sent_days=None):
+        return {
+            "notifyProto": proto,
+            "warningSentDays": warning_sent_days or [],
+            "_days_overdue": days_overdue,  # used in tests directly, not by the function
+        }
+
+    # ── should_send_warning ──
+
+    def test_warning_fires_on_day_1(self):
+        vault = self._vault(proto="ping_then_notify", warning_sent_days=[])
+        assert should_send_warning(vault, days_overdue=1) is True
+
+    def test_warning_fires_on_day_2(self):
+        vault = self._vault(proto="ping_then_notify", warning_sent_days=[1])
+        assert should_send_warning(vault, days_overdue=2) is True
+
+    def test_warning_not_sent_twice_same_day(self):
+        vault = self._vault(proto="ping_then_notify", warning_sent_days=[1])
+        assert should_send_warning(vault, days_overdue=1) is False
+
+    def test_warning_not_sent_on_day_3(self):
+        vault = self._vault(proto="ping_then_notify", warning_sent_days=[1, 2])
+        assert should_send_warning(vault, days_overdue=3) is False
+
+    def test_warning_skipped_for_notify_immediately(self):
+        vault = self._vault(proto="notify_immediately", warning_sent_days=[])
+        assert should_send_warning(vault, days_overdue=1) is False
+
+    def test_warning_skipped_for_escalate(self):
+        vault = self._vault(proto="escalate", warning_sent_days=[])
+        assert should_send_warning(vault, days_overdue=1) is False
+
+    # ── should_notify_contacts ──
+
+    def test_contacts_not_notified_before_day_3_ping_then_notify(self):
+        vault = self._vault(proto="ping_then_notify")
+        assert should_notify_contacts(vault, days_overdue=2) is False
+
+    def test_contacts_notified_on_day_3_ping_then_notify(self):
+        vault = self._vault(proto="ping_then_notify")
+        assert should_notify_contacts(vault, days_overdue=3) is True
+
+    # ── send_warning_email content ──
+
+    def test_warning_email_day_1_mentions_days_until_notify(self):
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        user = {"name": "Alex Smith", "email": "alex@example.com"}
+
+        with patch("main.requests.post", return_value=mock_response) as mock_post:
+            send_warning_email(user, days_overdue=1)
+
+        payload = mock_post.call_args[1]["json"]
+        assert "2 days" in payload["text"]  # CONTACT_NOTIFY_AFTER_DAYS - 1 = 2
+
+    def test_warning_email_day_2_uses_urgent_tone(self):
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        user = {"name": "Alex Smith", "email": "alex@example.com"}
+
+        with patch("main.requests.post", return_value=mock_response) as mock_post:
+            send_warning_email(user, days_overdue=2)
+
+        payload = mock_post.call_args[1]["json"]
+        assert "tomorrow" in payload["text"].lower()
+
+    def test_warning_email_silent_if_no_email(self):
+        user = {"name": "Alex Smith", "email": ""}
+        with patch("main.requests.post") as mock_post:
+            result = send_warning_email(user, days_overdue=1)
+        assert result is False
+        mock_post.assert_not_called()
+
+    def test_contacts_notified_email_mentions_count(self):
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        user = {"name": "Alex Smith", "email": "alex@example.com"}
+
+        with patch("main.requests.post", return_value=mock_response) as mock_post:
+            send_contacts_notified_email(user, contact_count=3)
+
+        payload = mock_post.call_args[1]["json"]
+        assert "3 contacts" in payload["text"]
+
+    def test_contacts_notified_email_silent_if_no_email(self):
+        user = {"name": "Alex Smith", "email": ""}
+        with patch("main.requests.post") as mock_post:
+            result = send_contacts_notified_email(user, contact_count=2)
+        assert result is False
+        mock_post.assert_not_called()

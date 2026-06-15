@@ -5,6 +5,7 @@ Handles: auth, vault sync, check-in, pulse scan (overdue + reminder emails).
 """
 
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 import base64
 import hashlib
 import io
@@ -59,17 +60,22 @@ resets_col = db["password_resets"] if db is not None else None
 RESET_TOKEN_TTL_MINUTES = 60
 MIN_PASSWORD_LENGTH = 8
 
+# F64-2: Warning days for ping_then_notify protocol
+# Warnings fire on these days of overdue; contacts notified on day 3+
+WARNING_DAYS = [1, 2]
+CONTACT_NOTIFY_AFTER_DAYS = 3
+
 
 # ─── TIMESTAMP HELPERS ────────────────────────────────────────────────────────
 
-def ms_to_dt(ms: int | None) -> datetime | None:
+def ms_to_dt(ms: Optional[int]) -> Optional[datetime]:
     """Convert JS millisecond timestamp to Python datetime (UTC)."""
     if ms is None:
         return None
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
 
 
-def dt_to_ms(dt: datetime | None) -> int | None:
+def dt_to_ms(dt: Optional[datetime]) -> Optional[int]:
     """Convert Python datetime to JS millisecond timestamp."""
     if dt is None:
         return None
@@ -155,7 +161,7 @@ def hash_reset_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def is_reset_valid(reset_doc: dict | None) -> bool:
+def is_reset_valid(reset_doc: Optional[dict]) -> bool:
     """A reset record is valid only if it exists, is unused, and unexpired."""
     if reset_doc is None:
         return False
@@ -230,7 +236,7 @@ def is_reminder_due(vault_doc: dict) -> bool:
     """
     Returns True when the vault holder should receive a check-in reminder.
 
-    Mirrors the frontend 25% rule: fires when time remaining ≤ 25% of the
+    Mirrors the frontend 25% rule: fires when time remaining <= 25% of the
     interval, but only once per cycle (guarded by the reminderSent flag).
     Does NOT fire if the vault is already overdue.
     """
@@ -244,6 +250,33 @@ def is_reminder_due(vault_doc: dict) -> bool:
     days_remaining = (last_checkin + timedelta(days=interval) - now_utc()).days
 
     return 0 <= days_remaining <= threshold
+
+
+# ─── F64-2: WARNING HELPERS ───────────────────────────────────────────────────
+
+def should_send_warning(vault_doc: dict, days_overdue: int) -> bool:
+    """
+    Returns True if a warning email should be sent to the holder today.
+    Only applies to ping_then_notify protocol, and only on WARNING_DAYS (1, 2).
+    Guards against re-sending on the same day via warningSentDays list.
+    """
+    if vault_doc.get("notifyProto", "ping_then_notify") != "ping_then_notify":
+        return False
+    if days_overdue not in WARNING_DAYS:
+        return False
+    already_sent = vault_doc.get("warningSentDays", [])
+    return days_overdue not in already_sent
+
+
+def should_notify_contacts(vault_doc: dict, days_overdue: int) -> bool:
+    """
+    For ping_then_notify: contacts notified only after CONTACT_NOTIFY_AFTER_DAYS (3).
+    For all other protocols: existing behaviour (notify immediately / escalate).
+    """
+    proto = vault_doc.get("notifyProto", "ping_then_notify")
+    if proto == "ping_then_notify":
+        return days_overdue >= CONTACT_NOTIFY_AFTER_DAYS
+    return True
 
 
 # ─── NOTIFICATION QUEUE ───────────────────────────────────────────────────────
@@ -267,7 +300,7 @@ def get_contacts_to_notify(vault_doc: dict, days_overdue: int) -> list:
 
 # ─── EMAIL HELPERS ────────────────────────────────────────────────────────────
 
-def _send_email(to: str, subject: str, body: str, attachment: dict | None = None) -> bool:
+def _send_email(to: str, subject: str, body: str, attachment: Optional[dict] = None) -> bool:
     """Low-level Resend dispatch. Returns True on success."""
     payload: dict = {
         "from": FROM_EMAIL,
@@ -336,6 +369,92 @@ To change your frequency, open Settings in the app.
     sent = _send_email(email, f"Your Kinlight check-in is due in {days_label}", body)
     if sent:
         print(f"F60: Reminder sent to {email} ({days_remaining} days remaining)")
+    return sent
+
+
+def send_warning_email(user: dict, days_overdue: int) -> bool:
+    """F64-2: Warn the vault holder during their overdue window (day 1 and day 2).
+    Gives them a chance to check in before contacts are notified on day 3.
+    Fails silently if user has no email address."""
+    email = user.get("email", "")
+    if not email:
+        return False
+
+    name = (user.get("name", "").split()[0] or "there")
+    days_until_notify = CONTACT_NOTIFY_AFTER_DAYS - days_overdue
+
+    if days_overdue == 1:
+        urgency = "Your check-in is overdue."
+        detail = (
+            f"Your nominated contacts will be notified in {days_until_notify} days "
+            f"if you don't check in."
+        )
+    else:
+        urgency = "Final warning — your contacts will be notified tomorrow."
+        detail = (
+            "If you don't check in today, your nominated contacts will automatically "
+            "receive your vault package."
+        )
+
+    body = f"""Hi {name},
+
+{urgency}
+
+{detail}
+
+If you're okay, please open Kinlight and tap the heart to check in now:
+{APP_URL}?action=checkin
+
+Checking in will immediately reset your timer and cancel any pending notifications.
+
+If you didn't mean to miss your check-in, this is your chance to fix it before your contacts are alerted.
+
+The Kinlight team
+
+---
+You're receiving this because you have a check-in schedule set up in Kinlight.
+"""
+    sent = _send_email(
+        email,
+        f"Action needed — Kinlight check-in overdue (day {days_overdue})",
+        body,
+    )
+    if sent:
+        print(f"F64-2: Warning email sent to {email} (day {days_overdue} overdue)")
+    return sent
+
+
+def send_contacts_notified_email(user: dict, contact_count: int) -> bool:
+    """F64-2: Notify the vault holder that their contacts have been notified.
+    Sent on day 3+ when ping_then_notify contacts are actually dispatched."""
+    email = user.get("email", "")
+    if not email:
+        return False
+
+    name = (user.get("name", "").split()[0] or "there")
+    contacts_label = f"{contact_count} contact{'s' if contact_count != 1 else ''}"
+
+    body = f"""Hi {name},
+
+Your Kinlight vault package has been sent to your {contacts_label}.
+
+This happened because your check-in was not completed within your scheduled window and grace period.
+
+If this was a mistake and you are okay, please open Kinlight and check in now — this will send an all-clear email to your contacts immediately.
+
+{APP_URL}?action=checkin
+
+If you have any concerns, please reach out to your contacts directly.
+
+The Kinlight team
+"""
+    sent = _send_email(
+        email,
+        "Your Kinlight contacts have been notified",
+        body,
+    )
+    if sent:
+        print(f"F64-2: Contacts-notified email sent to {email} ({contact_count} contacts)")
     return sent
 
 
@@ -550,9 +669,10 @@ def generate_pdf_for_contact(contact: dict, vault_doc: dict, holder_name: str = 
 
 def run_pulse_scan():
     """
-    Hourly background job with two responsibilities:
-    1. Overdue — notifies contacts when grace period has expired.
-    2. F60 Reminder — emails vault holder when check-in is approaching.
+    Hourly background job with three responsibilities:
+    1. F64-2 Warnings — emails holder on day 1 and day 2 of overdue window (ping_then_notify only).
+    2. Overdue — notifies contacts when grace period has expired (day 3+ for ping_then_notify).
+    3. F60 Reminder — emails vault holder when check-in is approaching.
     """
     print("Pulse scan running...")
     now = now_utc()
@@ -568,19 +688,35 @@ def run_pulse_scan():
         overdue, days_overdue = is_overdue(vault_doc)
 
         if overdue:
-            already_notified = vault_doc.get("overdueNotificationSent", False)
             proto = vault_doc.get("notifyProto", "ping_then_notify")
             holder_name = user.get("name", "the vault holder")
 
-            if not already_notified or proto == "escalate":
-                contacts = get_contacts_to_notify(vault_doc, days_overdue)
-                for contact in contacts:
-                    send_notification_email(contact, vault_doc, holder_name)
-                if contacts and proto != "escalate":
+            # F64-2: Send holder warning email on day 1 and day 2 (ping_then_notify only)
+            if should_send_warning(vault_doc, days_overdue):
+                if send_warning_email(user, days_overdue):
+                    already_sent = vault_doc.get("warningSentDays", [])
                     vaults_col.update_one(
                         {"_id": vault_doc["_id"]},
-                        {"$set": {"overdueNotificationSent": True, "updatedAt": now}},
+                        {"$set": {"warningSentDays": already_sent + [days_overdue], "updatedAt": now}},
                     )
+                continue  # Don't notify contacts yet during warning window
+
+            # Notify contacts (day 3+ for ping_then_notify, immediately for others)
+            if should_notify_contacts(vault_doc, days_overdue):
+                already_notified = vault_doc.get("overdueNotificationSent", False)
+                if not already_notified or proto == "escalate":
+                    contacts = get_contacts_to_notify(vault_doc, days_overdue)
+                    sent_count = sum(
+                        1 for c in contacts
+                        if send_notification_email(c, vault_doc, holder_name)
+                    )
+                    if contacts and proto != "escalate":
+                        # F64-2: Also notify the holder that contacts have been reached
+                        send_contacts_notified_email(user, sent_count)
+                        vaults_col.update_one(
+                            {"_id": vault_doc["_id"]},
+                            {"$set": {"overdueNotificationSent": True, "updatedAt": now}},
+                        )
             continue  # Skip reminder check when already overdue
 
         if is_reminder_due(vault_doc):
@@ -729,6 +865,7 @@ def vault_sync(body: dict, current_user: dict = Depends(get_current_user)):
                 "createdAt":               now,
                 "overdueNotificationSent": False,
                 "reminderSent":            False,
+                "warningSentDays":         [],
             },
         },
         upsert=True,
@@ -761,7 +898,7 @@ def contact_nominate(body: dict, current_user: dict = Depends(get_current_user))
 @app.post("/checkin")
 def checkin(current_user: dict = Depends(get_current_user)):
     """
-    Record a check-in. Resets overdueNotificationSent and reminderSent
+    Record a check-in. Resets overdueNotificationSent, reminderSent, and warningSentDays
     so the next cycle starts fresh.
     """
     now = now_utc()
@@ -774,6 +911,7 @@ def checkin(current_user: dict = Depends(get_current_user)):
             "lastCheckin":               now,
             "overdueNotificationSent":   False,
             "reminderSent":              False,
+            "warningSentDays":           [],
             "updatedAt":                 now,
         }},
         upsert=True,
@@ -813,6 +951,7 @@ def force_overdue(current_user: dict = Depends(get_current_user)):
             "lastCheckin":               datetime(2020, 1, 1, tzinfo=timezone.utc),
             "overdueNotificationSent":   False,
             "reminderSent":              False,
+            "warningSentDays":           [],
             "updatedAt":                 now_utc(),
         }},
         upsert=True,
@@ -838,8 +977,32 @@ def force_reminder(current_user: dict = Depends(get_current_user)):
             "lastCheckin":               fake_checkin,
             "reminderSent":              False,
             "overdueNotificationSent":   False,
+            "warningSentDays":           [],
             "updatedAt":                 now_utc(),
         }},
         upsert=True,
     )
     return {"ok": True, "message": f"Vault set to reminder-due state ({threshold - 1} days remaining)"}
+
+
+@app.post("/admin/force-warning")
+def force_warning(current_user: dict = Depends(get_current_user)):
+    """F64-2: Set vault to day 1 of overdue (just inside warning window). For testing."""
+    vault_doc = vaults_col.find_one({"userId": current_user["_id"]})
+    interval = _interval_days(vault_doc) if vault_doc else 60
+    grace = vault_doc.get("gracePeriodDays", 7) if vault_doc else 7
+    # Place lastCheckin so vault is exactly 1 day into overdue
+    fake_checkin = now_utc() - timedelta(days=interval + grace + 1)
+
+    vaults_col.update_one(
+        {"userId": current_user["_id"]},
+        {"$set": {
+            "lastCheckin":               fake_checkin,
+            "overdueNotificationSent":   False,
+            "reminderSent":              False,
+            "warningSentDays":           [],
+            "updatedAt":                 now_utc(),
+        }},
+        upsert=True,
+    )
+    return {"ok": True, "message": "Vault set to day 1 of overdue (warning window)"}
