@@ -47,7 +47,7 @@ APP_URL = "https://ramenfanclub.github.io/emergency-exit/"
 # Once kinlight.app shows "Verified" in the Resend dashboard, change this line to:
 #     FROM_EMAIL = "Kinlight <hello@kinlight.app>"
 # This is the ONLY remaining F72b step; it absorbs F68 (verified domain) and unblocks F63.
-FROM_EMAIL = "Emergency Exit <onboarding@resend.dev>"
+FROM_EMAIL = "Kinlight <hello@kinlight.app>"
 
 client = MongoClient(MONGO_URI) if MONGO_URI else None
 db = client["emergency_exit"] if client is not None else None
