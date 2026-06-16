@@ -2,7 +2,6 @@ fastapi
 uvicorn
 pymongo
 pydantic
-python-jose[cryptography]
 bcrypt
 python-dotenv
 resend

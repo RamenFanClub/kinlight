@@ -517,7 +517,7 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 | F88 | Lock down CORS to allowed origins only | Must | done | **OWASP A05 — Security Misconfiguration.** `allow_origins=["*"]` with `allow_credentials=True` lets any website make authenticated API calls as a logged-in user. Change to `["https://kinlight.app", "https://ramenfanclub.github.io"]`. ~5 min. **Tier 1.** |
 | F79 | Validate nomination email against user's vault contacts | Must | backlog | **OWASP A01 — Broken Access Control.** `POST /contact/nominate` sends emails to any address without checking the contact exists in the user's vault. Could be abused to spam arbitrary emails from Kinlight's verified domain. Query `vaults_col` to verify contact email before sending. ~20 min. **Tier 1.** |
 | F80 | Assign unique passwords to each tester | Must | backlog | **OWASP A04 — Insecure Design.** All 6 testers share password `Benny#07`. Any tester can log in as any other tester. Update each account with a unique password in MongoDB Atlas before expanding tester group. ~15 min (manual). **Tier 1.** |
-| F81 | Remove python-jose from requirements.txt | Must | backlog | **OWASP A05 — Security Misconfiguration.** `python-jose[cryptography]` is still listed despite project using PyJWT. Installs unnecessary dependencies with potential vulnerabilities. Delete the line. ~2 min. **Tier 1.** |
+| F81 | Remove python-jose from requirements.txt | Must | done | **OWASP A05 — Security Misconfiguration.** `python-jose[cryptography]` is still listed despite project using PyJWT. Installs unnecessary dependencies with potential vulnerabilities. Delete the line. ~2 min. **Tier 1.** |
 
 ---
 
