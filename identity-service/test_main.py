@@ -840,7 +840,7 @@ class TestPasswordReset:
         assert is_password_acceptable("short") is False
 
     def test_eight_char_password_accepted(self):
-        assert is_password_acceptable("abcdefgh") is True
+        assert is_password_acceptable("abcdefg1") is True  # F97: needs digit/special
 
     def test_non_string_password_rejected(self):
         assert is_password_acceptable(None) is False
@@ -1253,3 +1253,123 @@ class TestAccountLockout:
             call_args = mock_col.update_one.call_args
             assert call_args[0][1]["$set"]["failedLoginCount"] == 0
             assert "lockedUntil" in call_args[0][1]["$unset"]
+
+
+# ─── F94: Security Response Headers ──────────────────────────────────────────
+
+class TestSecurityHeaders:
+    """F94: Verify security response headers are present on all responses."""
+
+    def test_x_content_type_options(self):
+        from main import app
+        from fastapi.testclient import TestClient
+        client = TestClient(app)
+        resp = client.get("/health")
+        assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+
+    def test_x_frame_options(self):
+        from main import app
+        from fastapi.testclient import TestClient
+        client = TestClient(app)
+        resp = client.get("/health")
+        assert resp.headers.get("X-Frame-Options") == "DENY"
+
+    def test_strict_transport_security(self):
+        from main import app
+        from fastapi.testclient import TestClient
+        client = TestClient(app)
+        resp = client.get("/health")
+        hsts = resp.headers.get("Strict-Transport-Security", "")
+        assert "max-age=31536000" in hsts
+
+    def test_referrer_policy(self):
+        from main import app
+        from fastapi.testclient import TestClient
+        client = TestClient(app)
+        resp = client.get("/health")
+        assert resp.headers.get("Referrer-Policy") == "strict-origin-when-cross-origin"
+
+
+# ─── F96: Vault Sync Input Limits ────────────────────────────────────────────
+
+class TestVaultSyncLimits:
+    """F96: Validate payload size limits on vault sync."""
+
+    def test_too_many_assets_rejected(self):
+        from main import vault_sync, MAX_VAULT_ASSETS
+        from fastapi import HTTPException
+        import pytest
+        body = {"vault": {"assets": [{"name": f"a{i}"} for i in range(MAX_VAULT_ASSETS + 1)]}}
+        with pytest.raises(HTTPException) as exc_info:
+            vault_sync(body, {"_id": "test"})
+        assert exc_info.value.status_code == 400
+        assert "assets" in exc_info.value.detail.lower()
+
+    def test_too_many_contacts_rejected(self):
+        from main import vault_sync, MAX_VAULT_CONTACTS
+        from fastapi import HTTPException
+        import pytest
+        body = {"vault": {"assets": [], "kin": [{"name": f"c{i}"} for i in range(MAX_VAULT_CONTACTS + 1)]}}
+        with pytest.raises(HTTPException) as exc_info:
+            vault_sync(body, {"_id": "test"})
+        assert exc_info.value.status_code == 400
+        assert "contacts" in exc_info.value.detail.lower()
+
+    def test_assets_not_a_list_rejected(self):
+        from main import vault_sync
+        from fastapi import HTTPException
+        import pytest
+        body = {"vault": {"assets": "not_a_list"}}
+        with pytest.raises(HTTPException) as exc_info:
+            vault_sync(body, {"_id": "test"})
+        assert exc_info.value.status_code == 400
+
+    def test_valid_payload_accepted(self):
+        """Ensure normal-sized payloads pass the F96 checks (will fail at DB layer, which is fine)."""
+        from main import vault_sync
+        import pytest
+        body = {"vault": {"assets": [{"name": "house"}], "kin": [{"name": "Mum"}]}}
+        # Will raise at DB layer (no real DB), but should NOT raise 400
+        with pytest.raises(Exception) as exc_info:
+            vault_sync(body, {"_id": "test"})
+        # If it's an HTTPException, it must NOT be 400 (our validation)
+        from fastapi import HTTPException
+        if isinstance(exc_info.value, HTTPException):
+            assert exc_info.value.status_code != 400
+
+
+# ─── F97: Stronger Password Policy ──────────────────────────────────────────
+
+class TestStrongerPasswordPolicy:
+    """F97: Password must be 8+ chars, not common, and contain a digit or special char."""
+
+    def test_common_password_rejected(self):
+        from main import is_password_acceptable
+        assert is_password_acceptable("password") is False
+        assert is_password_acceptable("123456789") is False
+        assert is_password_acceptable("qwerty123") is False
+
+    def test_alpha_only_rejected(self):
+        from main import is_password_acceptable
+        assert is_password_acceptable("abcdefghi") is False
+        assert is_password_acceptable("MySecretPass") is False
+
+    def test_too_short_rejected(self):
+        from main import is_password_acceptable
+        assert is_password_acceptable("Ab1!") is False
+
+    def test_valid_password_accepted(self):
+        from main import is_password_acceptable
+        assert is_password_acceptable("MySecret1") is True
+        assert is_password_acceptable("hunter!!two") is True
+        assert is_password_acceptable("Benny#07xx") is True
+
+    def test_common_password_case_insensitive(self):
+        from main import is_password_acceptable
+        assert is_password_acceptable("PASSWORD") is False
+        assert is_password_acceptable("Password") is False
+
+    def test_empty_and_none_rejected(self):
+        from main import is_password_acceptable
+        assert is_password_acceptable("") is False
+        assert is_password_acceptable(None) is False

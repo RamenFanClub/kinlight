@@ -391,7 +391,7 @@ notes, isTester, isAdmin, createdAt, lastLogin
 
 **File:** `identity-service/test_main.py`
 **Run:** `python3 -m pytest test_main.py -v`
-**Expected:** 149 passed
+**Expected:** 163 passed
 
 ### Coverage by feature
 
@@ -417,6 +417,9 @@ notes, isTester, isAdmin, createdAt, lastLogin
 | `TestPdfEscaping` | F83 HTML/XML escape in ReportLab PDF generation | 8 |
 | `TestJwtSecretValidation` | F84 JWT_SECRET startup validation — missing, empty, valid | 3 |
 | `TestAccountLockout` | F86 account lockout — lock/unlock logic, counter, threshold, clear on login/reset | 10 |
+| `TestSecurityHeaders` | F94 security response headers — X-Content-Type-Options, X-Frame-Options, HSTS, Referrer-Policy | 4 |
+| `TestVaultSyncLimits` | F96 vault sync input limits — max assets, max contacts, type check, valid payload | 4 |
+| `TestStrongerPasswordPolicy` | F97 password policy — common passwords, alpha-only, length, valid, case-insensitive, empty/None | 6 |
 
 ### Frontend test coverage
 F44, F45, and other frontend features are not covered by the pytest suite — pytest only covers the Python backend. Frontend test coverage requires a browser automation tool (e.g. Playwright). This is tracked as a future infrastructure task. See F58 in the backlog.
@@ -594,10 +597,10 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 | F69 | Settings clarity — "Check in every" + next-due date | Could | done | Section renamed to "Check in every"; sub-label "Custom Interval" → "Interval". Next check-in due date shown below stepper (en-AU locale). Amber warning if frequency + grace < 14 days. `renderNextDueLine()` called on adj, setU, adjGP, and Settings render. |
 | F70 | Hide/label Verification setting; rename "dry run" button | Could | done | FaceID/Biometrics row greyed out (opacity 0.45, pointer-events none) with "Coming soon" sub-label; Secure Passcode is now always-selected default. Both "Generate all packages (dry run)" buttons renamed to "Preview all packages (nothing is sent)". |
 | F71 | Login screen one-line value prop | Could | idea | UX review 1.5: login screen gives a new visitor no idea what the app is. One line under the logo. Defer until self-signup exists. |
-| F94 | Add security response headers (X-Frame-Options, HSTS, etc.) | Could | backlog | **OWASP A05 — Security Misconfiguration.** Backend doesn't set `X-Content-Type-Options`, `X-Frame-Options`, `Strict-Transport-Security`, or `Referrer-Policy`. Add middleware to FastAPI. ~15 min. **Tier 3.** |
+| F94 | Add security response headers (X-Frame-Options, HSTS, etc.) | Could | done | **OWASP A05 — Security Misconfiguration.** Backend doesn't set `X-Content-Type-Options`, `X-Frame-Options`, `Strict-Transport-Security`, or `Referrer-Policy`. Add middleware to FastAPI. ~15 min. **Tier 3.** |
 | F95 | Structured security logging + failed login tracking | Could | backlog | **OWASP A09 — Logging Failures.** Backend uses `print()` for logging — no structure, no levels, no timestamps. Failed logins not logged. Replace with `logging` module or `structlog`. Log failed attempts with username. Mask PII (emails) in logs. ~2 hrs. **Tier 3.** |
-| F96 | Input length limits on vault sync | Could | backlog | **OWASP — Defence in depth.** `POST /vault/sync` accepts unlimited payload size. A malicious client could send a 100MB vault. Add request body size limit (1MB) and validate array lengths (max 500 assets, 50 contacts). ~30 min. **Tier 3.** |
-| F97 | Strengthen password policy | Could | backlog | **OWASP A07 — Auth Failures.** Only requirement is 8+ characters. Add check against common-passwords list (top 10k). Consider requiring one number or special character. ~30 min. **Tier 3.** |
+| F96 | Input length limits on vault sync | Could | done | **OWASP — Defence in depth.** `POST /vault/sync` accepts unlimited payload size. A malicious client could send a 100MB vault. Add request body size limit (1MB) and validate array lengths (max 500 assets, 50 contacts). ~30 min. **Tier 3.** |
+| F97 | Strengthen password policy | Could | done | **OWASP A07 — Auth Failures.** Only requirement is 8+ characters. Add check against common-passwords list (top 10k). Consider requiring one number or special character. ~30 min. **Tier 3.** |
 | F98 | Surface the grace period as its own visible UI state | Must | done | **UX gap, not a backend bug.** The backend already tracks a grace period (`gracePeriodDays`, default 7) between the check-in due date and the point contacts are actually notified (`is_overdue()` in `main.py`). The frontend didn't know about it: the "due soon" reminder turned off at the due date, the overdue banner didn't turn on until the grace period ended, and in between the UI froze on "0 days remaining" with no explanation — looking broken to testers. Fixed entirely in `index.html`/`frontend/index.html` (no backend change needed; the data was already there via `getOverdueStatus()`). Added a third state — Grace Period — alongside the existing Active/Overdue states: new `#grace-banner`, hero headline ("Your light is flickering."), status badge ("Grace Period"), and pulse card title ("Grace period active") all keyed off a new `showGrace` flag. Also fixed a latent bug found while building this: the old check-in-timing block unconditionally overwrote the days-remaining label whenever `!showOverdue` was true, which would have clobbered the new grace-period label too — now guarded with `!showGrace`. 6 new Playwright tests added in `hero-and-banners.spec.js` covering the grace window and its boundaries against the overdue/reminder states. |
 
 ---

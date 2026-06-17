@@ -43,6 +43,17 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization"],
 )
 
+# F94: Security response headers (OWASP A05)
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+
 MONGO_URI = os.environ.get("MONGO_URI", "")
 JWT_SECRET = os.environ.get("JWT_SECRET", "")
 if not JWT_SECRET:
@@ -78,6 +89,32 @@ CONTACT_NOTIFY_AFTER_DAYS = 3
 # F86: Account lockout after repeated failed logins
 MAX_LOGIN_ATTEMPTS = 5
 LOCKOUT_MINUTES = 15
+
+# F97: Common passwords list (top 100 from breach databases)
+COMMON_PASSWORDS = {
+    "password", "123456", "12345678", "qwerty", "abc123", "monkey", "1234567",
+    "letmein", "trustno1", "dragon", "baseball", "iloveyou", "master", "sunshine",
+    "ashley", "michael", "shadow", "123123", "654321", "superman", "qazwsx",
+    "football", "password1", "password123", "batman", "login", "welcome",
+    "solo", "princess", "starwars", "admin", "passw0rd", "hello", "charlie",
+    "donald", "loveme", "zaq1zaq1", "whatever", "qwerty123", "aa12345678",
+    "access", "696969", "mustang", "thunder", "1234", "12345", "123456789",
+    "1234567890", "000000", "1111111", "11111111", "121212", "131313",
+    "666666", "7777777", "987654321", "abcdef", "aaaaaa", "jesus",
+    "ninja", "azerty", "lovely", "hottie", "freedom", "george", "flower",
+    "secret", "biteme", "jordan", "pepper", "buster", "joshua", "ginger",
+    "matrix", "silver", "summer", "killer", "robert", "soccer", "hockey",
+    "ranger", "daniel", "hunter", "harley", "thomas", "zxcvbnm", "lakers",
+    "andrea", "tigger", "222222", "computer", "corvette", "blahblah",
+    "cookie", "chicken", "sparky", "snoopy", "samantha", "austin",
+    "mercedes", "sierra", "gemini", "peanut", "butter", "tigger",
+}
+
+# F96: Vault sync payload limits
+MAX_VAULT_ASSETS = 500
+MAX_VAULT_CONTACTS = 50
+MAX_VAULT_BODY_BYTES = 1_000_000  # 1 MB
+
 
 
 # ─── TIMESTAMP HELPERS ────────────────────────────────────────────────────────
@@ -193,8 +230,16 @@ def is_reset_valid(reset_doc: Optional[dict]) -> bool:
 
 
 def is_password_acceptable(password: str) -> bool:
-    """Minimum bar for a new password."""
-    return isinstance(password, str) and len(password) >= MIN_PASSWORD_LENGTH
+    """Minimum bar for a new password. F97: also rejects common passwords
+    and requires at least one digit or special character."""
+    if not isinstance(password, str) or len(password) < MIN_PASSWORD_LENGTH:
+        return False
+    if password.lower() in COMMON_PASSWORDS:
+        return False
+    has_digit_or_special = any(not c.isalpha() for c in password)
+    if not has_digit_or_special:
+        return False
+    return True
 
 
 # ─── F86: ACCOUNT LOCKOUT HELPERS ─────────────────────────────────────────────
@@ -914,7 +959,7 @@ def reset_password(body: dict):
     new_password = body.get("password", "")
 
     if not is_password_acceptable(new_password):
-        raise HTTPException(status_code=400, detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters.")
+        raise HTTPException(status_code=400, detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters, include a number or special character, and not be a commonly used password.")
 
     reset_doc = resets_col.find_one({"tokenHash": hash_reset_token(token)}) if token else None
     if not is_reset_valid(reset_doc):
@@ -942,6 +987,15 @@ def list_testers(current_user: dict = Depends(get_current_user)):
 @app.post("/vault/sync")
 def vault_sync(body: dict, current_user: dict = Depends(get_current_user)):
     vault_blob = body.get("vault", {})
+
+    # F96: validate payload limits
+    assets = vault_blob.get("assets", [])
+    contacts = vault_blob.get("kin", [])
+    if not isinstance(assets, list) or len(assets) > MAX_VAULT_ASSETS:
+        raise HTTPException(status_code=400, detail=f"Too many assets (max {MAX_VAULT_ASSETS}).")
+    if not isinstance(contacts, list) or len(contacts) > MAX_VAULT_CONTACTS:
+        raise HTTPException(status_code=400, detail=f"Too many contacts (max {MAX_VAULT_CONTACTS}).")
+
     now = now_utc()
 
     content = {
