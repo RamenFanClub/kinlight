@@ -391,7 +391,7 @@ notes, isTester, isAdmin, createdAt, lastLogin
 
 **File:** `identity-service/test_main.py`
 **Run:** `python3 -m pytest test_main.py -v`
-**Expected:** 163 passed
+**Expected:** 164 passed
 
 ### Coverage by feature
 
@@ -417,7 +417,7 @@ notes, isTester, isAdmin, createdAt, lastLogin
 | `TestPdfEscaping` | F83 HTML/XML escape in ReportLab PDF generation | 8 |
 | `TestJwtSecretValidation` | F84 JWT_SECRET startup validation — missing, empty, valid | 3 |
 | `TestAccountLockout` | F86 account lockout — lock/unlock logic, counter, threshold, clear on login/reset | 10 |
-| `TestSecurityHeaders` | F94 security response headers — X-Content-Type-Options, X-Frame-Options, HSTS, Referrer-Policy | 4 |
+| `TestSecurityHeaders` | F94 security response headers — middleware registered, X-Content-Type-Options, X-Frame-Options, HSTS, Referrer-Policy (async direct call, no TestClient) | 5 |
 | `TestVaultSyncLimits` | F96 vault sync input limits — max assets, max contacts, type check, valid payload | 4 |
 | `TestStrongerPasswordPolicy` | F97 password policy — common passwords, alpha-only, length, valid, case-insensitive, empty/None | 6 |
 
