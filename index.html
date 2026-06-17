@@ -750,7 +750,7 @@ async function doLogin(){
   if(!username||!password){errEl.textContent='Please enter your username and password.';errEl.classList.add('on');return;}
   try{
     const res=await fetch(API+'/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});
-    if(!res.ok){errEl.textContent='Incorrect username or password.';errEl.classList.add('on');return;}
+    if(!res.ok){const err=await res.json().catch(()=>({}));errEl.textContent=(res.status===429&&err.detail)?err.detail:'Incorrect username or password.';errEl.classList.add('on');return;}
     const data=await res.json();
     sessionStorage.setItem('ee_token',data.token);
     sessionStorage.setItem('ee_user',JSON.stringify(data.user));

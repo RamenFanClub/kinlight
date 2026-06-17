@@ -150,7 +150,7 @@ The `index.html` includes a login wall:
 cd identity-service
 python3 -m pytest test_main.py -v
 ```
-Expected output: `139 passed` — if any fail, fix before pushing.
+Expected output: `149 passed` — if any fail, fix before pushing.
 
 ---
 
@@ -388,7 +388,7 @@ notes, isTester, isAdmin, createdAt, lastLogin
 
 **File:** `identity-service/test_main.py`
 **Run:** `python3 -m pytest test_main.py -v`
-**Expected:** 139 passed
+**Expected:** 149 passed
 
 ### Coverage by feature
 
@@ -413,6 +413,7 @@ notes, isTester, isAdmin, createdAt, lastLogin
 | `TestRequireAdmin` | F77 admin role check — require_admin(), clean_user isAdmin | 6 |
 | `TestPdfEscaping` | F83 HTML/XML escape in ReportLab PDF generation | 8 |
 | `TestJwtSecretValidation` | F84 JWT_SECRET startup validation — missing, empty, valid | 3 |
+| `TestAccountLockout` | F86 account lockout — lock/unlock logic, counter, threshold, clear on login/reset | 10 |
 
 ### Frontend test coverage
 F44, F45, and other frontend features are not covered by the pytest suite — pytest only covers the Python backend. Frontend test coverage requires a browser automation tool (e.g. Playwright). This is tracked as a future infrastructure task. See F58 in the backlog.
@@ -490,7 +491,7 @@ When building a new feature, add a new `class TestFeatureName` block to `test_ma
 
 > **Last groomed:** June 2026 — end-to-end UX review (see `ux-review-emergency-exit.md`). Added F61–F71. F55 elevated from Could to Must (moved to Must table). Three themes drove the new items: (1) false confidence — app can imply protection that doesn't exist (F61, F65); (2) broken promises — UI offers things that aren't built (F55, F64, F70); (3) recipient journey — delivery email is anonymous and untrusted (F62, F63, F68). Priority order for next sprint: F55 (3-line fix, do first) → ~~F61 + F62 as one batch~~ **done** → ~~F63~~ **done** → ~~F64~~ **done** → F65. Pre-expansion gates: F66, F67, F68. Deferred unchanged: F07, F59, F39-5, F39-6, F04.
 >
-> **OWASP security audit June 2026:** Deep review against OWASP Top 10 (2021). Added F77–F95. Full report: `kinlight-owasp-audit.md`. Two critical findings: JWT tokens never expire (F78), admin endpoints have no role check (F77). Four high-severity: ~~XSS via innerHTML (F82)~~ **done**, ~~CORS wide open (F88)~~ **done**, no rate limiting (F91), no account lockout (F86). Three tiers: Tier 1 (pre-expansion, ~2 hrs) → Tier 2 (pre-launch) → Tier 3 (post-launch). F04 (encryption) confirmed as hard pre-launch gate.
+> **OWASP security audit June 2026:** Deep review against OWASP Top 10 (2021). Added F77–F95. Full report: `kinlight-owasp-audit.md`. Two critical findings: JWT tokens never expire (F78), admin endpoints have no role check (F77). Four high-severity: ~~XSS via innerHTML (F82)~~ **done**, ~~CORS wide open (F88)~~ **done**, no rate limiting (F91), ~~no account lockout (F86)~~ **done**. Three tiers: Tier 1 (pre-expansion, ~2 hrs) → Tier 2 (pre-launch) → Tier 3 (post-launch). F04 (encryption) confirmed as hard pre-launch gate.
 >
 > **Branding update June 2026:** App renamed **Emergency Exit → Kinlight** (name + Lantern logo + lighthouse/harbour/anchor theme; see `kinlight-brand-guide.html` and `kinlight-logo-options-r2.html`). Code-level rename tracked as **F72** — **F72a (frontend) ✅ done; F72b (backend) ✅ fully complete June 2026** — `kinlight.app` verified in Resend ✅, `FROM_EMAIL` flipped ✅, `APP_URL` updated to `https://kinlight.app` ✅, backup filename updated to `kinlight-backup-*` ✅. **`kinlight.app` live as custom domain on GitHub Pages ✅ (Cloudflare DNS configured June 2026).** F68 absorbed ✅. Remaining pre-launch admin: TM check (F75), ASIC name (F76), .com.au (F74).
 
@@ -552,7 +553,7 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 | F83 | Escape user data in ReportLab PDF generation | Should | done | **OWASP A03 — Injection.** `generate_pdf_for_contact()` passes raw user strings into ReportLab `Paragraph()`, which interprets HTML tags. Malformed input could crash PDF generation, preventing delivery. Fixed: `xml.sax.saxutils.escape()` applied to all user strings before passing to Paragraph. 8 new tests (`TestPdfEscaping`). |
 | F84 | Remove JWT_SECRET hardcoded fallback | Should | done | **OWASP A02 — Cryptographic Failures.** `JWT_SECRET` no longer defaults to `"dev-secret"`. App raises `RuntimeError` at startup if env var is missing or empty. 3 new tests (`TestJwtSecretValidation`). |
 | F85 | Pin dependency versions in requirements.txt | Should | backlog | **OWASP A05 — Security Misconfiguration.** Packages listed without versions — each deploy could pull different versions, introducing breaking changes or CVEs. Run `pip freeze` to pin, or adopt pip-tools/Poetry. ~15 min. **Tier 2.** |
-| F86 | Account lockout after failed login attempts | Should | backlog | **OWASP A04 — Insecure Design.** No counter for failed logins — passwords can be brute-forced indefinitely. Track failures per username in MongoDB; lock after 5 attempts for 15 min. ~1 hr. **Tier 2.** |
+| F86 | Account lockout after failed login attempts | Should | done | **OWASP A04 — Insecure Design.** Tracks `failedLoginCount` and `lockedUntil` on user documents. After 5 consecutive failures, account locked for 15 min (HTTP 429 with human-readable wait time). Counter resets on successful login and password reset (F66). Frontend shows lockout message. 10 new tests (`TestAccountLockout`). |
 | F87 | Add Content Security Policy (CSP) header | Should | backlog | **OWASP A05 — Security Misconfiguration.** No CSP header — if XSS is achieved, no restrictions on script execution. Add `<meta>` CSP tag to `index.html` allowing `'self'`, cdnjs, Google Fonts, and the Railway API. ~30 min. **Tier 2.** |
 | F89 | Add SRI integrity hash to jsPDF CDN script | Should | backlog | **OWASP A06 — Vulnerable Components.** jsPDF loaded from cdnjs without Subresource Integrity hash. A compromised CDN could inject malicious scripts. Add `integrity` and `crossorigin="anonymous"` attributes. ~10 min. **Tier 2.** |
 | F90 | Add dependency vulnerability scanning to CI | Should | backlog | **OWASP A06 — Vulnerable Components.** No automated CVE checks. Add `pip-audit` step to GitHub Actions CI workflow. ~15 min. **Tier 2.** |
@@ -628,7 +629,7 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 - [ ] Replace `identity-service/main.py` in VS Code
 - [ ] Replace `identity-service/test_main.py` in VS Code
 - [ ] `cp index.html frontend/index.html`
-- [ ] Run `python3 -m pytest test_main.py -v` — confirm 139 passed before pushing
+- [ ] Run `python3 -m pytest test_main.py -v` — confirm 149 passed before pushing
 - [ ] `git add -A`
 - [ ] `git commit -m "..."`
 - [ ] `git push`

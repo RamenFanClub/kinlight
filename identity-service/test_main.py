@@ -1,7 +1,7 @@
 """
 Emergency Exit — Backend Test Suite
 Run: python3 -m pytest test_main.py -v
-Expected: 139 passed
+Expected: 149 passed
 """
 
 import pytest
@@ -33,6 +33,13 @@ from main import (
     contact_nominate,
     require_admin,
     generate_pdf_for_contact,
+    is_account_locked,
+    get_lockout_remaining_seconds,
+    record_failed_login,
+    clear_login_failures,
+    MAX_LOGIN_ATTEMPTS,
+    LOCKOUT_MINUTES,
+    now_utc,
 )
 
 
@@ -1138,3 +1145,111 @@ class TestJwtSecretValidation:
     def test_valid_jwt_secret_works(self):
         """A non-empty JWT_SECRET should let the module load normally."""
         assert JWT_SECRET and len(JWT_SECRET) > 0
+
+# ─── F86: ACCOUNT LOCKOUT ────────────────────────────────────────────────────
+
+class TestAccountLockout:
+    """F86 — brute-force protection via account lockout after repeated failures."""
+
+    def _make_user(self, username="testuser", failed_count=0, locked_until=None):
+        """Create a fake user dict for testing."""
+        user = {
+            "_id": "fake_id_123",
+            "username": username,
+            "password": hash_password("correct"),
+            "failedLoginCount": failed_count,
+        }
+        if locked_until is not None:
+            user["lockedUntil"] = locked_until
+        return user
+
+    # ── is_account_locked ─────────────────────────────────────────────────
+
+    def test_not_locked_when_no_lockout_field(self):
+        """A user with no lockedUntil field is not locked."""
+        user = self._make_user()
+        with patch("main.users_col") as mock_col:
+            mock_col.find_one.return_value = user
+            assert is_account_locked("testuser") is False
+
+    def test_not_locked_when_lockout_expired(self):
+        """A user whose lockedUntil is in the past is not locked."""
+        past = now_utc() - timedelta(minutes=1)
+        user = self._make_user(locked_until=past)
+        with patch("main.users_col") as mock_col:
+            mock_col.find_one.return_value = user
+            assert is_account_locked("testuser") is False
+
+    def test_locked_when_lockout_in_future(self):
+        """A user whose lockedUntil is in the future IS locked."""
+        future = now_utc() + timedelta(minutes=10)
+        user = self._make_user(locked_until=future)
+        with patch("main.users_col") as mock_col:
+            mock_col.find_one.return_value = user
+            assert is_account_locked("testuser") is True
+
+    def test_not_locked_for_unknown_user(self):
+        """Querying a non-existent username returns False (not locked)."""
+        with patch("main.users_col") as mock_col:
+            mock_col.find_one.return_value = None
+            assert is_account_locked("ghost") is False
+
+    # ── get_lockout_remaining_seconds ─────────────────────────────────────
+
+    def test_remaining_seconds_when_locked(self):
+        """Returns positive seconds when lockout is active."""
+        future = now_utc() + timedelta(minutes=10)
+        user = self._make_user(locked_until=future)
+        with patch("main.users_col") as mock_col:
+            mock_col.find_one.return_value = user
+            remaining = get_lockout_remaining_seconds("testuser")
+            assert 500 <= remaining <= 600  # ~10 minutes
+
+    def test_remaining_seconds_zero_when_expired(self):
+        """Returns 0 when lockout has passed."""
+        past = now_utc() - timedelta(minutes=5)
+        user = self._make_user(locked_until=past)
+        with patch("main.users_col") as mock_col:
+            mock_col.find_one.return_value = user
+            assert get_lockout_remaining_seconds("testuser") == 0
+
+    # ── record_failed_login ───────────────────────────────────────────────
+
+    def test_increments_failure_count(self):
+        """Each failed attempt bumps failedLoginCount by 1."""
+        user = self._make_user(failed_count=2)
+        with patch("main.users_col") as mock_col:
+            mock_col.find_one.return_value = user
+            record_failed_login("testuser")
+            call_args = mock_col.update_one.call_args
+            set_fields = call_args[0][1]["$set"]
+            assert set_fields["failedLoginCount"] == 3
+            assert "lockedUntil" not in set_fields  # not yet at threshold
+
+    def test_locks_account_at_threshold(self):
+        """When failedLoginCount reaches MAX_LOGIN_ATTEMPTS, lockedUntil is set."""
+        user = self._make_user(failed_count=MAX_LOGIN_ATTEMPTS - 1)
+        with patch("main.users_col") as mock_col:
+            mock_col.find_one.return_value = user
+            record_failed_login("testuser")
+            call_args = mock_col.update_one.call_args
+            set_fields = call_args[0][1]["$set"]
+            assert set_fields["failedLoginCount"] == MAX_LOGIN_ATTEMPTS
+            assert "lockedUntil" in set_fields
+
+    def test_no_crash_for_unknown_user(self):
+        """Recording a failure for a non-existent user does nothing."""
+        with patch("main.users_col") as mock_col:
+            mock_col.find_one.return_value = None
+            record_failed_login("ghost")  # should not raise
+            mock_col.update_one.assert_not_called()
+
+    # ── clear_login_failures ──────────────────────────────────────────────
+
+    def test_clears_count_and_lockout(self):
+        """clear_login_failures resets the counter and removes lockedUntil."""
+        with patch("main.users_col") as mock_col:
+            clear_login_failures("testuser")
+            call_args = mock_col.update_one.call_args
+            assert call_args[0][1]["$set"]["failedLoginCount"] == 0
+            assert "lockedUntil" in call_args[0][1]["$unset"]

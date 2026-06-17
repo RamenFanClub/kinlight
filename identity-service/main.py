@@ -75,6 +75,10 @@ MIN_PASSWORD_LENGTH = 8
 WARNING_DAYS = [1, 2]
 CONTACT_NOTIFY_AFTER_DAYS = 3
 
+# F86: Account lockout after repeated failed logins
+MAX_LOGIN_ATTEMPTS = 5
+LOCKOUT_MINUTES = 15
+
 
 # ─── TIMESTAMP HELPERS ────────────────────────────────────────────────────────
 
@@ -191,6 +195,59 @@ def is_reset_valid(reset_doc: Optional[dict]) -> bool:
 def is_password_acceptable(password: str) -> bool:
     """Minimum bar for a new password."""
     return isinstance(password, str) and len(password) >= MIN_PASSWORD_LENGTH
+
+
+# ─── F86: ACCOUNT LOCKOUT HELPERS ─────────────────────────────────────────────
+
+def is_account_locked(username: str) -> bool:
+    """Check if a username is currently locked out due to failed login attempts."""
+    if users_col is None:
+        return False
+    user = users_col.find_one({"username": username})
+    if user is None:
+        return False
+    locked_until = user.get("lockedUntil")
+    if locked_until is None:
+        return False
+    return now_utc() < locked_until
+
+
+def get_lockout_remaining_seconds(username: str) -> int:
+    """Return seconds remaining on lockout, or 0 if not locked."""
+    if users_col is None:
+        return 0
+    user = users_col.find_one({"username": username})
+    if user is None:
+        return 0
+    locked_until = user.get("lockedUntil")
+    if locked_until is None:
+        return 0
+    remaining = (locked_until - now_utc()).total_seconds()
+    return max(0, int(remaining))
+
+
+def record_failed_login(username: str) -> None:
+    """Increment failed login counter; lock the account if threshold is reached."""
+    if users_col is None:
+        return
+    user = users_col.find_one({"username": username})
+    if user is None:
+        return
+    new_count = user.get("failedLoginCount", 0) + 1
+    update_fields = {"failedLoginCount": new_count}
+    if new_count >= MAX_LOGIN_ATTEMPTS:
+        update_fields["lockedUntil"] = now_utc() + timedelta(minutes=LOCKOUT_MINUTES)
+    users_col.update_one({"_id": user["_id"]}, {"$set": update_fields})
+
+
+def clear_login_failures(username: str) -> None:
+    """Reset failed login counter and remove lockout. Called on successful login and password reset."""
+    if users_col is None:
+        return
+    users_col.update_one(
+        {"username": username},
+        {"$set": {"failedLoginCount": 0}, "$unset": {"lockedUntil": ""}},
+    )
 
 
 def clean_user(user: dict) -> dict:
@@ -786,10 +843,26 @@ def login(body: dict):
     username = body.get("username", "").strip().lower()
     password = body.get("password", "")
 
+    # F86: check lockout BEFORE verifying credentials
+    if username and is_account_locked(username):
+        remaining = get_lockout_remaining_seconds(username)
+        minutes_left = max(1, (remaining + 59) // 60)  # round up to nearest minute
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many failed attempts. Please try again in {minutes_left} minute{'s' if minutes_left != 1 else ''}.",
+        )
+
     user = users_col.find_one({"username": username})
     if not user or not check_password(password, user.get("password", "")):
+        # F86: record the failure (only if the username actually exists — avoids
+        # creating lockout records for non-existent usernames, which would be a
+        # resource-exhaustion vector)
+        if username:
+            record_failed_login(username)
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
+    # F86: successful login — clear any accumulated failures
+    clear_login_failures(username)
     users_col.update_one({"_id": user["_id"]}, {"$set": {"lastLogin": now_utc()}})
     return {"ok": True, "token": create_token(str(user["_id"])), "user": clean_user(user)}
 
@@ -852,6 +925,10 @@ def reset_password(body: dict):
         {"$set": {"password": hash_password(new_password)}},
     )
     resets_col.update_one({"_id": reset_doc["_id"]}, {"$set": {"used": True}})
+    # F86: clear lockout so the user can log in immediately with their new password
+    reset_user = users_col.find_one({"_id": reset_doc["userId"]})
+    if reset_user is not None:
+        clear_login_failures(reset_user.get("username", ""))
     return {"ok": True, "message": "Password updated. You can now sign in."}
 
 
