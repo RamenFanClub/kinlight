@@ -1,4 +1,4 @@
-name: Emergency Exit — CI
+name: Kinlight — CI
 
 # ─── WHEN THIS RUNS ───────────────────────────────────────────────────────────
 # Triggers on every push to main, and on every pull request targeting main.
@@ -117,3 +117,31 @@ jobs:
           name: playwright-report
           path: playwright-report/
           retention-days: 7
+
+  # ─── JOB 4: DEPENDENCY VULNERABILITY SCAN (F90) ───────────────────────────
+  # Runs pip-audit against requirements.txt to check for known CVEs.
+  # If any dependency has a published vulnerability, this job fails.
+  # This catches security issues BEFORE they reach production.
+  dependency-audit:
+    name: Dependency Audit (pip-audit)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies + pip-audit
+        working-directory: identity-service
+        run: |
+          pip install -r requirements.txt
+          pip install pip-audit
+
+      - name: Run pip-audit
+        working-directory: identity-service
+        run: |
+          pip-audit -r requirements.txt --desc

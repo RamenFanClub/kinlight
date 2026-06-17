@@ -116,7 +116,7 @@ The `index.html` includes a login wall:
 - **Backend:** Railway (`emergency-exit-production.up.railway.app`) — auto-deploys on `git push`
 - **Database:** MongoDB Atlas on Google Cloud
 - **Email provider:** Resend (`resend.com`) — free tier, 100 emails/day
-- **CI:** GitHub Actions — `.github/workflows/ci.yml` runs pytest + frontend sync check on every push to `main`
+- **CI:** GitHub Actions — `.github/workflows/ci.yml` runs 4 jobs on every push to `main`: pytest, frontend sync check, Playwright browser tests, pip-audit dependency scan
 - **Test suite:** `identity-service/test_main.py` — 85 pytest tests covering all backend features
 - **JWT library:** `PyJWT` (replaces `python-jose` — update `requirements.txt` accordingly)
 
@@ -134,15 +134,18 @@ The `index.html` includes a login wall:
 ## CI/CD
 
 - **GitHub Pages** auto-deploys on every push to `main` — CD is already live
-- **GitHub Actions** (`.github/workflows/ci.yml`) — two jobs run on every push:
+- **GitHub Actions** (`.github/workflows/ci.yml`) — four jobs run on every push:
   1. **Backend Tests** — runs `pytest test_main.py -v` inside `identity-service/`. Deploy does not proceed if any test fails.
   2. **Frontend Sync Check** — confirms `./index.html` and `./frontend/index.html` are identical
+  3. **Frontend Tests (Playwright)** — runs Playwright browser tests against `index.html` in Chromium
+  4. **Dependency Audit (pip-audit)** — checks all pinned packages against known CVE database (F90)
+- **Branch protection (F92):** `main` requires all 4 CI status checks to pass before merging. PRs not required (solo dev).
 - **Railway** auto-deploys backend on every push to `main`
 - **Developer workflow:**
   1. Edit `./index.html` in VSCode
   2. Run `cp index.html frontend/index.html` in terminal
   3. `git add -A && git commit -m "..." && git push`
-  4. GitHub Actions runs pytest + sync check ✅ → Pages deploys automatically 🚀
+  4. GitHub Actions runs 4 checks (pytest + sync + Playwright + pip-audit) ✅ → Pages deploys automatically 🚀
   5. Railway picks up backend changes and redeploys automatically 🚀
 
 ### Running tests locally (before pushing)
@@ -552,13 +555,13 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 | F68 | Custom verified sending domain on Resend | Should | done | UX review 4.2: emails currently send from `onboarding@resend.dev` (sandbox) — delivery email reads as phishing at the worst possible moment. Already noted in learnings as pre-live; formalised here and **elevated to pre-expansion gate.** Pairs with F63. |
 | F83 | Escape user data in ReportLab PDF generation | Should | done | **OWASP A03 — Injection.** `generate_pdf_for_contact()` passes raw user strings into ReportLab `Paragraph()`, which interprets HTML tags. Malformed input could crash PDF generation, preventing delivery. Fixed: `xml.sax.saxutils.escape()` applied to all user strings before passing to Paragraph. 8 new tests (`TestPdfEscaping`). |
 | F84 | Remove JWT_SECRET hardcoded fallback | Should | done | **OWASP A02 — Cryptographic Failures.** `JWT_SECRET` no longer defaults to `"dev-secret"`. App raises `RuntimeError` at startup if env var is missing or empty. 3 new tests (`TestJwtSecretValidation`). |
-| F85 | Pin dependency versions in requirements.txt | Should | backlog | **OWASP A05 — Security Misconfiguration.** Packages listed without versions — each deploy could pull different versions, introducing breaking changes or CVEs. Run `pip freeze` to pin, or adopt pip-tools/Poetry. ~15 min. **Tier 2.** |
+| F85 | Pin dependency versions in requirements.txt | Should | done | **OWASP A05 — Security Misconfiguration.** All 11 packages pinned with exact `==` versions in `requirements.txt`. Prevents deploy-to-deploy drift. |
 | F86 | Account lockout after failed login attempts | Should | done | **OWASP A04 — Insecure Design.** Tracks `failedLoginCount` and `lockedUntil` on user documents. After 5 consecutive failures, account locked for 15 min (HTTP 429 with human-readable wait time). Counter resets on successful login and password reset (F66). Frontend shows lockout message. 10 new tests (`TestAccountLockout`). |
-| F87 | Add Content Security Policy (CSP) header | Should | backlog | **OWASP A05 — Security Misconfiguration.** No CSP header — if XSS is achieved, no restrictions on script execution. Add `<meta>` CSP tag to `index.html` allowing `'self'`, cdnjs, Google Fonts, and the Railway API. ~30 min. **Tier 2.** |
-| F89 | Add SRI integrity hash to jsPDF CDN script | Should | backlog | **OWASP A06 — Vulnerable Components.** jsPDF loaded from cdnjs without Subresource Integrity hash. A compromised CDN could inject malicious scripts. Add `integrity` and `crossorigin="anonymous"` attributes. ~10 min. **Tier 2.** |
-| F90 | Add dependency vulnerability scanning to CI | Should | backlog | **OWASP A06 — Vulnerable Components.** No automated CVE checks. Add `pip-audit` step to GitHub Actions CI workflow. ~15 min. **Tier 2.** |
+| F87 | Add Content Security Policy (CSP) header | Should | done | **OWASP A05 — Security Misconfiguration.** `<meta>` CSP tag added to `index.html`. Allows `'self'`, cdnjs (scripts), Google Fonts (styles + fonts), Railway API (connect), `data:` (images). Blocks everything else. Uses `'unsafe-inline'` for scripts/styles (required by current inline architecture). |
+| F89 | Add SRI integrity hash to jsPDF CDN script | Should | done | **OWASP A06 — Vulnerable Components.** Added `integrity="sha384-..."` and `crossorigin="anonymous"` to jsPDF 2.5.1 CDN script tag. Browser will refuse to execute if file is tampered with. |
+| F90 | Add dependency vulnerability scanning to CI | Should | done | **OWASP A06 — Vulnerable Components.** New "Dependency Audit (pip-audit)" job added to `ci.yml`. Runs `pip-audit -r requirements.txt --desc` on every push. Fails CI if any dependency has a known CVE. |
 | F91 | Rate limiting on all endpoints | Should | backlog | **OWASP A07 — Auth Failures.** No rate limiting anywhere. Enables brute-force login, nomination email spam, Resend quota exhaustion. Add `slowapi`: login 5/min per IP, reset 3/min, nominate 10/min per user, admin 5/min. ~1 hr. **Tier 2.** |
-| F92 | Enable GitHub branch protection on main | Should | backlog | **OWASP A08 — Software Integrity.** Auto-deploy from `main` with no branch protection. A compromised GitHub account could push malicious code that deploys immediately. Require CI to pass + self-review. ~10 min. **Tier 2.** |
+| F92 | Enable GitHub branch protection on main | Should | done | **OWASP A08 — Software Integrity.** Branch protection rule created on `main`: "Require status checks to pass before merging" enabled. All 4 CI jobs (pytest, sync check, Playwright, pip-audit) must pass. PRs not required (solo dev). |
 | F93 | Pulse scanner health monitoring | Should | backlog | **OWASP A09 — Logging Failures.** No way to detect if the hourly pulse scanner stops running silently. Write `lastPulseScan` timestamp to MongoDB, expose on `/health`. If scanner dies, Kinlight's core promise is broken with no one knowing. ~1 hr. **Tier 2.** |
 
 ---
