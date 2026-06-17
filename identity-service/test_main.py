@@ -1,7 +1,7 @@
 """
 Emergency Exit — Backend Test Suite
 Run: python3 -m pytest test_main.py -v
-Expected: 128 passed
+Expected: 136 passed
 """
 
 import pytest
@@ -32,6 +32,7 @@ from main import (
     send_contacts_notified_email,
     contact_nominate,
     require_admin,
+    generate_pdf_for_contact,
 )
 
 
@@ -1013,3 +1014,85 @@ class TestRequireAdmin:
         user = {"_id": "abc", "username": "regular"}
         cleaned = clean_user(user)
         assert cleaned["isAdmin"] is False
+
+
+# ─── F83: PDF ESCAPING ────────────────────────────────────────────────────────
+
+class TestPdfEscaping:
+    """F83: user data with HTML-like chars must not crash ReportLab PDF generation."""
+
+    def _vault(self, **overrides):
+        """Build a minimal vault doc, merging overrides into content."""
+        base = {"content": {"assets": [], "wishes": [], "kin": [], "will": None, "suppDocs": []}}
+        base["content"].update(overrides)
+        return base
+
+    def _contact(self, **overrides):
+        base = {"first": "Jane", "last": "Doe", "email": "j@e.com"}
+        base.update(overrides)
+        return base
+
+    def test_html_tags_in_contact_name(self):
+        """Angle brackets in contact name should not crash PDF."""
+        pdf = generate_pdf_for_contact(
+            self._contact(first="<b>Bold</b>", last="<i>Italic</i>"),
+            self._vault(),
+        )
+        assert isinstance(pdf, bytes) and len(pdf) > 0
+
+    def test_ampersand_in_asset_name(self):
+        """Ampersand in asset name should not crash PDF."""
+        pdf = generate_pdf_for_contact(
+            self._contact(),
+            self._vault(assets=[{"name": "Tom & Jerry's Account", "category": "Bank"}]),
+        )
+        assert isinstance(pdf, bytes) and len(pdf) > 0
+
+    def test_angle_brackets_in_wish_details(self):
+        """Angle brackets in wish details should not crash PDF."""
+        pdf = generate_pdf_for_contact(
+            self._contact(),
+            self._vault(wishes=[{"title": "Wish <1>", "details": "Details with <script>alert('xss')</script>"}]),
+        )
+        assert isinstance(pdf, bytes) and len(pdf) > 0
+
+    def test_html_in_letter(self):
+        """HTML tags in personal letter should not crash PDF."""
+        pdf = generate_pdf_for_contact(
+            self._contact(letter="Dear <b>family</b>,\n\nI love <you> & yours.\n\n"),
+            self._vault(),
+        )
+        assert isinstance(pdf, bytes) and len(pdf) > 0
+
+    def test_html_in_will_notes(self):
+        """HTML in Will notes should not crash PDF."""
+        pdf = generate_pdf_for_contact(
+            self._contact(),
+            self._vault(will={"status": "signed", "notes": "Filed at <Smith & Partners>"}),
+        )
+        assert isinstance(pdf, bytes) and len(pdf) > 0
+
+    def test_html_in_holder_name(self):
+        """HTML in holder_name param should not crash PDF."""
+        pdf = generate_pdf_for_contact(
+            self._contact(),
+            self._vault(),
+            holder_name="<script>alert('xss')</script>",
+        )
+        assert isinstance(pdf, bytes) and len(pdf) > 0
+
+    def test_html_in_supp_docs(self):
+        """HTML in supporting document fields should not crash PDF."""
+        pdf = generate_pdf_for_contact(
+            self._contact(),
+            self._vault(suppDocs=[{"name": "<b>Doc</b>", "loc": "At <solicitor's> office"}]),
+        )
+        assert isinstance(pdf, bytes) and len(pdf) > 0
+
+    def test_html_in_kin_fields(self):
+        """HTML in kin contact fields should not crash PDF."""
+        pdf = generate_pdf_for_contact(
+            self._contact(),
+            self._vault(kin=[{"first": "<b>Bob</b>", "last": "O'<Brien>", "rel": "Brother", "email": "b@e.com"}]),
+        )
+        assert isinstance(pdf, bytes) and len(pdf) > 0

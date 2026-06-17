@@ -11,6 +11,7 @@ import hashlib
 import io
 import os
 import secrets
+from xml.sax.saxutils import escape as xml_escape
 
 import bcrypt
 import jwt
@@ -603,21 +604,25 @@ def generate_pdf_for_contact(contact: dict, vault_doc: dict, holder_name: str = 
     def hr():
         return HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#e0e0e0"))
 
+    def esc(text: str) -> str:
+        """F83: escape user strings before ReportLab Paragraph (interprets HTML)."""
+        return xml_escape(text) if text else ""
+
     def section(title: str) -> list:
-        return [hr(), Spacer(1, 8), Paragraph(title, styles["section"])]
+        return [hr(), Spacer(1, 8), Paragraph(esc(title), styles["section"])]
 
     def field(label: str, value: str) -> list:
         if not value:
             return []
-        return [Paragraph(label, styles["label"]), Paragraph(value, styles["body"])]
+        return [Paragraph(esc(label), styles["label"]), Paragraph(esc(value), styles["body"])]
 
-    first = contact.get("first", "")
-    last  = contact.get("last", "")
+    first = esc(contact.get("first", ""))
+    last  = esc(contact.get("last", ""))
 
     story = [
         Paragraph("Kinlight", styles["heading"]),
         Paragraph(f"Prepared for {first} {last}", styles["sub"]),
-        Paragraph(f"From {holder_name}", styles["sub"]),
+        Paragraph(f"From {esc(holder_name)}", styles["sub"]),
         Paragraph(f"Generated {datetime.now().strftime('%-d %B %Y')}", styles["sub"]),
         HRFlowable(width="100%", thickness=1, color=colors.HexColor("#e0e0e0")),
         Spacer(1, 12),
@@ -627,14 +632,14 @@ def generate_pdf_for_contact(contact: dict, vault_doc: dict, holder_name: str = 
     letter = contact.get("letter", "").strip()
     if letter:
         for line in letter.split("\n"):
-            story.append(Paragraph(line or "&nbsp;", styles["body"]))
+            story.append(Paragraph(esc(line) or "&nbsp;", styles["body"]))
     else:
         story.append(Paragraph("[No personal letter recorded for this contact.]", styles["body"]))
 
     story += section("Will & Legal Documents")
     if will:
         status_map = {"signed": "Signed & witnessed", "draft": "Draft — not signed", "none": "No Will yet"}
-        story += field("Status", status_map.get(will.get("status", ""), will.get("status", "")))
+        story += field("Status", status_map.get(will.get("status", ""), esc(will.get("status", ""))))
         story += field("Solicitor / Law Firm", will.get("solicitor", ""))
         story += field("Primary Location", will.get("loc1", ""))
         story += field("Secondary Location", will.get("loc2", ""))
@@ -645,35 +650,35 @@ def generate_pdf_for_contact(contact: dict, vault_doc: dict, holder_name: str = 
     if supp_docs:
         story += section("Supporting Documents")
         for d in supp_docs:
-            story += field(d.get("name", ""), f"Location: {d['loc']}" if d.get("loc") else "")
+            story += field(d.get("name", ""), f"Location: {esc(d['loc'])}" if d.get("loc") else "")
 
     if assets:
         story += section("Asset Register")
         for a in assets:
             parts = [x for x in [
-                a.get("category"),
+                esc(a.get("category", "")),
                 f"${round(a['value']):,}" if a.get("value") else None,
-                a.get("details"),
-                f"Beneficiary: {a['beneficiary']}" if a.get("beneficiary") else None,
+                esc(a.get("details", "")),
+                f"Beneficiary: {esc(a['beneficiary'])}" if a.get("beneficiary") else None,
             ] if x]
-            story += [Paragraph(a.get("name", ""), styles["label"]),
+            story += [Paragraph(esc(a.get("name", "")), styles["label"]),
                       Paragraph(" · ".join(parts), styles["body"])]
 
     if wishes:
         story += section("My Wishes")
         for w in wishes:
-            story += [Paragraph(w.get("title", ""), styles["label"])]
+            story += [Paragraph(esc(w.get("title", "")), styles["label"])]
             if w.get("details"):
-                story.append(Paragraph(w["details"], styles["body"]))
+                story.append(Paragraph(esc(w["details"]), styles["body"]))
 
     if all_kin:
         story += section("Key Contacts")
         for c in all_kin:
             parts = [x for x in [
-                f"{c.get('first', '')} {c.get('last', '')}".strip(),
-                c.get("rel"),
-                c.get("email"),
-                c.get("phone"),
+                f"{esc(c.get('first', ''))} {esc(c.get('last', ''))}".strip(),
+                esc(c.get("rel", "")),
+                esc(c.get("email", "")),
+                esc(c.get("phone", "")),
             ] if x]
             story.append(Paragraph(" · ".join(parts), styles["body"]))
 

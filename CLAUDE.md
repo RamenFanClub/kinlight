@@ -150,7 +150,7 @@ The `index.html` includes a login wall:
 cd identity-service
 python3 -m pytest test_main.py -v
 ```
-Expected output: `128 passed` — if any fail, fix before pushing.
+Expected output: `136 passed` — if any fail, fix before pushing.
 
 ---
 
@@ -388,7 +388,7 @@ notes, isTester, isAdmin, createdAt, lastLogin
 
 **File:** `identity-service/test_main.py`
 **Run:** `python3 -m pytest test_main.py -v`
-**Expected:** 128 passed
+**Expected:** 136 passed
 
 ### Coverage by feature
 
@@ -411,6 +411,7 @@ notes, isTester, isAdmin, createdAt, lastLogin
 | `TestWarningLogic` | F64-2 escalating warning emails — should_send_warning, should_notify_contacts, email content, guard logic | 13 |
 | `TestPasswordReset` | F66 password reset — token hashing, expiry, single-use, email | 14 |
 | `TestRequireAdmin` | F77 admin role check — require_admin(), clean_user isAdmin | 6 |
+| `TestPdfEscaping` | F83 HTML/XML escape in ReportLab PDF generation | 8 |
 
 ### Frontend test coverage
 F44, F45, and other frontend features are not covered by the pytest suite — pytest only covers the Python backend. Frontend test coverage requires a browser automation tool (e.g. Playwright). This is tracked as a future infrastructure task. See F58 in the backlog.
@@ -547,7 +548,7 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 | F66 | Password reset / account recovery | Should | done | UX review 1.4: false-alarm prevention — a locked-out user cannot check in. Email-based reset via Resend. `POST /auth/request-reset` (anti-enumeration: identical response whether account exists or not) + `POST /auth/reset-password`. Tokens: `secrets.token_urlsafe(32)`, stored SHA-256 hashed in `password_resets` collection, 60-min expiry, single-use, TTL index auto-cleans expired records. Frontend: "Forgot your password?" link on login, reset form triggered by `?reset=` query param (token scrubbed from URL via `history.replaceState`). 14 new pytest tests (99 total). **Note: reset only works for accounts with an `email` field in MongoDB — testers need emails added in Atlas.** |
 | F67 | One-tap check-in link in reminder email | Should | done | UX review 2.1: sessionStorage token means every check-in requires a fresh login — exactly where check-ins die for the target audience. Preferred: signed, expiring token URL in the F60 reminder email that checks in without login. Cheaper alternative: persistent login token in localStorage with expiry. Biggest single reducer of false alarms. |
 | F68 | Custom verified sending domain on Resend | Should | done | UX review 4.2: emails currently send from `onboarding@resend.dev` (sandbox) — delivery email reads as phishing at the worst possible moment. Already noted in learnings as pre-live; formalised here and **elevated to pre-expansion gate.** Pairs with F63. |
-| F83 | Escape user data in ReportLab PDF generation | Should | backlog | **OWASP A03 — Injection.** `generate_pdf_for_contact()` passes raw user strings into ReportLab `Paragraph()`, which interprets HTML tags. Malformed input could crash PDF generation, preventing delivery. Use `xml.sax.saxutils.escape()` before passing to Paragraph. ~20 min. **Tier 2.** |
+| F83 | Escape user data in ReportLab PDF generation | Should | done | **OWASP A03 — Injection.** `generate_pdf_for_contact()` passes raw user strings into ReportLab `Paragraph()`, which interprets HTML tags. Malformed input could crash PDF generation, preventing delivery. Fixed: `xml.sax.saxutils.escape()` applied to all user strings before passing to Paragraph. 8 new tests (`TestPdfEscaping`). |
 | F84 | Remove JWT_SECRET hardcoded fallback | Should | backlog | **OWASP A02 — Cryptographic Failures.** `JWT_SECRET` defaults to `"dev-secret"` if env var is missing. If Railway misconfigures, all tokens are signed with a predictable string. Raise an exception at startup if `JWT_SECRET` is not set. ~5 min. **Tier 2.** |
 | F85 | Pin dependency versions in requirements.txt | Should | backlog | **OWASP A05 — Security Misconfiguration.** Packages listed without versions — each deploy could pull different versions, introducing breaking changes or CVEs. Run `pip freeze` to pin, or adopt pip-tools/Poetry. ~15 min. **Tier 2.** |
 | F86 | Account lockout after failed login attempts | Should | backlog | **OWASP A04 — Insecure Design.** No counter for failed logins — passwords can be brute-forced indefinitely. Track failures per username in MongoDB; lock after 5 attempts for 15 min. ~1 hr. **Tier 2.** |
@@ -626,7 +627,7 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 - [ ] Replace `identity-service/main.py` in VS Code
 - [ ] Replace `identity-service/test_main.py` in VS Code
 - [ ] `cp index.html frontend/index.html`
-- [ ] Run `python3 -m pytest test_main.py -v` — confirm 128 passed before pushing
+- [ ] Run `python3 -m pytest test_main.py -v` — confirm 136 passed before pushing
 - [ ] `git add -A`
 - [ ] `git commit -m "..."`
 - [ ] `git push`
