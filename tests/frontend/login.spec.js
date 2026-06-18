@@ -1,5 +1,5 @@
 const { test, expect } = require('@playwright/test');
-const { mockAPI, loginViaUI, setupPage } = require('./helpers');
+const { mockAPI, loginViaUI, setupPage, buildVault } = require('./helpers');
 
 test.describe('Login Flow', () => {
 
@@ -69,8 +69,14 @@ test.describe('Login Flow', () => {
     // F99: the vault content cache (ee_v3) previously survived logout in
     // localStorage indefinitely, leaving plaintext vault data on a shared
     // or stolen device even after the user signed out.
-    await setupPage(page);
+    //
+    // The app only writes ee_v3 once it actually loads a non-null vault
+    // from the server (see loadFromServer() in index.html) — a fresh
+    // login with no vault data (the beforeEach default) never populates
+    // it. So this test overrides the default mock with a real vault.
+    await setupPage(page, { vault: buildVault() });
     await loginViaUI(page);
+
     // Confirm the vault cache actually exists before logging out, so this
     // test would fail loudly if the app stops caching at all.
     const cachedBeforeLogout = await page.evaluate(() => localStorage.getItem('ee_v3'));
