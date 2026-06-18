@@ -1,9 +1,10 @@
 """
 Emergency Exit — Backend Test Suite
 Run: python3 -m pytest test_main.py -v
-Expected: 181 passed
+Expected: 192 passed
 """
 
+import logging
 import pytest
 import jwt
 from datetime import datetime, timezone, timedelta
@@ -1687,3 +1688,134 @@ class TestNominateRateLimit:
                 headers={"Authorization": f"Bearer {token2}"},
             )
         assert r.status_code == 200  # user2's own bucket, unaffected by user1
+
+
+# ─── F95: STRUCTURED LOGGING TESTS ───────────────────────────────────────────
+
+
+class TestMaskEmail:
+    """F95: PII masking for email addresses in log output."""
+
+    def test_masks_simple_email(self):
+        assert main.mask_email("sent to alice@example.com ok") == "sent to a***@example.com ok"
+
+    def test_masks_single_char_local(self):
+        assert main.mask_email("a@b.com") == "a***@b.com"
+
+    def test_masks_multiple_emails(self):
+        result = main.mask_email("from bob@x.co to carol@y.org")
+        assert "b***@x.co" in result
+        assert "c***@y.org" in result
+
+    def test_no_email_unchanged(self):
+        msg = "Pulse scan running"
+        assert main.mask_email(msg) == msg
+
+    def test_preserves_surrounding_text(self):
+        result = main.mask_email("Error sending to zara@test.com — retrying")
+        assert result == "Error sending to z***@test.com — retrying"
+
+
+class TestJsonFormatter:
+    """F95: JSON log formatter produces valid JSON with PII masked."""
+
+    def test_output_is_valid_json(self):
+        import json as _json
+        formatter = main._JsonFormatter()
+        record = logging.LogRecord(
+            name="kinlight", level=logging.INFO, pathname="", lineno=0,
+            msg="Reminder sent to alice@example.com", args=(), exc_info=None,
+        )
+        line = formatter.format(record)
+        parsed = _json.loads(line)
+        assert parsed["level"] == "INFO"
+        assert "a***@example.com" in parsed["message"]
+        assert "alice@example.com" not in parsed["message"]
+        assert "timestamp" in parsed
+
+    def test_error_level(self):
+        import json as _json
+        formatter = main._JsonFormatter()
+        record = logging.LogRecord(
+            name="kinlight", level=logging.ERROR, pathname="", lineno=0,
+            msg="Email send failed to bob@x.com: timeout", args=(), exc_info=None,
+        )
+        line = formatter.format(record)
+        parsed = _json.loads(line)
+        assert parsed["level"] == "ERROR"
+        assert "b***@x.com" in parsed["message"]
+
+
+class TestSecurityLogging:
+    """F95: Security events are logged at correct levels.
+    Uses TestClient (not direct function calls) because the login endpoint
+    is wrapped by slowapi's rate limiter, which requires a real Request object.
+    Rate limiter is disabled during these tests so that other tests in the suite
+    don't exhaust the 5/minute login budget before we run.
+    """
+
+    def test_failed_login_logs_warning(self):
+        """Failed login should produce a WARNING log entry with the username."""
+        main.limiter.enabled = False
+        try:
+            client = TestClient(main.app)
+            with patch("main.users_col") as mock_users, \
+                 patch("main.logger") as mock_logger:
+                mock_users.find_one.return_value = None
+                client.post("/auth/login", json={"username": "baduser", "password": "wrong"})
+                warning_calls = [str(c) for c in mock_logger.warning.call_args_list]
+                assert any("baduser" in c for c in warning_calls)
+        finally:
+            main.limiter.enabled = True
+
+    def test_successful_login_logs_info(self):
+        """Successful login should produce an INFO log entry."""
+        main.limiter.enabled = False
+        try:
+            client = TestClient(main.app)
+            with patch("main.users_col") as mock_users, \
+                 patch("main.logger") as mock_logger:
+                mock_users.find_one.return_value = {
+                    "_id": ObjectId(), "username": "gooduser",
+                    "password": main.hash_password("Test1234!"), "name": "Good User",
+                }
+                mock_users.update_one.return_value = None
+                client.post("/auth/login", json={"username": "gooduser", "password": "Test1234!"})
+                info_calls = [str(c) for c in mock_logger.info.call_args_list]
+                assert any("gooduser" in c for c in info_calls)
+        finally:
+            main.limiter.enabled = True
+
+    def test_lockout_logs_warning(self):
+        """Login attempt on a locked account should produce a WARNING log."""
+        main.limiter.enabled = False
+        try:
+            client = TestClient(main.app)
+            with patch("main.users_col") as mock_users, \
+                 patch("main.logger") as mock_logger:
+                mock_users.find_one.return_value = {
+                    "_id": ObjectId(), "username": "lockeduser",
+                    "failedLoginCount": 5,
+                    "lockedUntil": datetime.now(timezone.utc) + timedelta(minutes=10),
+                }
+                r = client.post("/auth/login", json={"username": "lockeduser", "password": "whatever"})
+                assert r.status_code == 429
+                warning_calls = [str(c) for c in mock_logger.warning.call_args_list]
+                assert any("lockeduser" in c for c in warning_calls)
+        finally:
+            main.limiter.enabled = True
+
+    def test_failed_login_does_not_log_password(self):
+        """Passwords must NEVER appear in log output."""
+        main.limiter.enabled = False
+        try:
+            client = TestClient(main.app)
+            with patch("main.users_col") as mock_users, \
+                 patch("main.logger") as mock_logger:
+                mock_users.find_one.return_value = None
+                secret_pw = "MyS3cretP@ss!"
+                client.post("/auth/login", json={"username": "testuser", "password": secret_pw})
+                all_calls = str(mock_logger.warning.call_args_list) + str(mock_logger.info.call_args_list)
+                assert secret_pw not in all_calls
+        finally:
+            main.limiter.enabled = True

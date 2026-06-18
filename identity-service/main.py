@@ -11,6 +11,8 @@ import hashlib
 import io
 import json
 import os
+import logging
+import re as re_mod
 import secrets
 from xml.sax.saxutils import escape as xml_escape
 
@@ -34,6 +36,47 @@ from slowapi.util import get_remote_address
 
 
 # ─── APP & CONFIG ─────────────────────────────────────────────────────────────
+
+# ─── F95: STRUCTURED LOGGING ─────────────────────────────────────────────────
+#
+# Replace all print() calls with stdlib logging. JSON-formatted so Railway's
+# log dashboard can filter/search by level, event, and timestamp.
+# PII (email addresses) is masked in all log output via mask_email().
+
+_EMAIL_RE = re_mod.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
+
+
+def mask_email(value: str) -> str:
+    """Mask email addresses in a string: alice@example.com -> a***@example.com"""
+    def _mask(m: re_mod.Match) -> str:
+        email = m.group(0)
+        local, domain = email.split("@", 1)
+        if len(local) <= 1:
+            return f"{local}***@{domain}"
+        return f"{local[0]}***@{domain}"
+    return _EMAIL_RE.sub(_mask, value)
+
+
+class _JsonFormatter(logging.Formatter):
+    """Emit each log record as a single JSON line with PII masking."""
+    def format(self, record: logging.LogRecord) -> str:
+        import json as _json
+        msg = record.getMessage()
+        masked = mask_email(msg)
+        entry = {
+            "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
+            "level": record.levelname,
+            "message": masked,
+        }
+        return _json.dumps(entry)
+
+
+_handler = logging.StreamHandler()          # writes to stdout
+_handler.setFormatter(_JsonFormatter())
+logger = logging.getLogger("kinlight")
+logger.setLevel(logging.INFO)
+logger.addHandler(_handler)
+logger.propagate = False                    # avoid duplicate output
 
 # ─── F91: RATE LIMITING ───────────────────────────────────────────────────────
 #
@@ -546,7 +589,7 @@ def _send_email(to: str, subject: str, body: str, attachment: Optional[dict] = N
         response.raise_for_status()
         return True
     except Exception as e:
-        print(f"Email send failed to {to}: {e}")
+        logger.error(f"Email send failed to {to}: {e}")
         return False
 
 
@@ -590,7 +633,7 @@ To change your frequency, open Settings in the app.
 """
     sent = _send_email(email, f"Your Kinlight check-in is due in {days_label}", body)
     if sent:
-        print(f"F60: Reminder sent to {email} ({days_remaining} days remaining)")
+        logger.info(f"F60: Reminder sent to {email} ({days_remaining} days remaining)")
     return sent
 
 
@@ -642,7 +685,7 @@ You're receiving this because you have a check-in schedule set up in Kinlight.
         body,
     )
     if sent:
-        print(f"F64-2: Warning email sent to {email} (day {days_overdue} overdue)")
+        logger.info(f"F64-2: Warning email sent to {email} (day {days_overdue} overdue)")
     return sent
 
 
@@ -676,7 +719,7 @@ The Kinlight team
         body,
     )
     if sent:
-        print(f"F64-2: Contacts-notified email sent to {email} ({contact_count} contacts)")
+        logger.info(f"F64-2: Contacts-notified email sent to {email} ({contact_count} contacts)")
     return sent
 
 
@@ -706,7 +749,7 @@ The Kinlight team
 """
     sent = _send_email(email, f"Important: Kinlight package from {holder_name}", body, attachment)
     if sent:
-        print(f"Notification sent to {first} at {email}")
+        logger.info(f"Notification sent to {first} at {email}")
     return sent
 
 
@@ -727,7 +770,7 @@ The Kinlight team
 """
     sent = _send_email(email, f"All clear — {holder_name} is okay", body)
     if sent:
-        print(f"All-clear sent to {first} at {email}")
+        logger.info(f"All-clear sent to {first} at {email}")
     return sent
 
 
@@ -756,7 +799,7 @@ You received this because {holder_name} listed you as a trusted contact.
         body,
     )
     if sent:
-        print(f"F63: Nomination email sent to {contact_first} at {contact_email}")
+        logger.info(f"F63: Nomination email sent to {contact_first} at {contact_email}")
     return sent
 
 
@@ -775,7 +818,7 @@ def send_reset_email(user: dict, token: str) -> bool:
     )
     sent = _send_email(user.get("email", ""), "Reset your Kinlight password", body)
     if sent:
-        print(f"F66: Reset email sent to {user.get('username')}")
+        logger.info(f"F66: Reset email sent to {user.get('username')}")
     return sent
 
 
@@ -901,7 +944,7 @@ def run_pulse_scan():
     2. Overdue — notifies contacts when grace period has expired (day 3+ for ping_then_notify).
     3. F60 Reminder — emails vault holder when check-in is approaching.
     """
-    print("Pulse scan running...")
+    logger.info("Pulse scan running")
     now = now_utc()
 
     for vault_doc in vaults_col.find({}):
@@ -952,9 +995,9 @@ def run_pulse_scan():
                     {"_id": vault_doc["_id"]},
                     {"$set": {"reminderSent": True, "updatedAt": now}},
                 )
-                print(f"F60: reminderSent set for {user.get('username', user_id)}")
+                logger.info(f"F60: reminderSent set for {user.get('username', user_id)}")
 
-    print("Pulse scan complete.")
+    logger.info("Pulse scan complete")
 
 
 scheduler = BackgroundScheduler()
@@ -974,7 +1017,7 @@ async def startup():
     # F66: fast token lookup + MongoDB auto-deletes expired reset records
     resets_col.create_index([("tokenHash", ASCENDING)])
     resets_col.create_index([("expiresAt", ASCENDING)], expireAfterSeconds=0)
-    print("Startup complete — indexes ensured.")
+    logger.info("Startup complete — indexes ensured")
 
 
 @app.get("/health")
@@ -992,6 +1035,7 @@ def login(request: Request, body: dict):
     if username and is_account_locked(username):
         remaining = get_lockout_remaining_seconds(username)
         minutes_left = max(1, (remaining + 59) // 60)  # round up to nearest minute
+        logger.warning(f"Locked-out login attempt for username: {username} ({minutes_left} min remaining)")
         raise HTTPException(
             status_code=429,
             detail=f"Too many failed attempts. Please try again in {minutes_left} minute{'s' if minutes_left != 1 else ''}.",
@@ -1004,10 +1048,12 @@ def login(request: Request, body: dict):
         # resource-exhaustion vector)
         if username:
             record_failed_login(username)
+            logger.warning(f"Failed login attempt for username: {username}")
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     # F86: successful login — clear any accumulated failures
     clear_login_failures(username)
+    logger.info(f"Successful login for username: {username}")
     users_col.update_one({"_id": user["_id"]}, {"$set": {"lastLogin": now_utc()}})
     return {"ok": True, "token": create_token(str(user["_id"])), "user": clean_user(user)}
 
