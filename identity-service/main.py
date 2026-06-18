@@ -24,6 +24,7 @@ from bson import ObjectId
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pymongo import MongoClient, ASCENDING
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -165,6 +166,7 @@ db = client["emergency_exit"] if client is not None else None
 users_col = db["users"] if db is not None else None
 vaults_col = db["vaults"] if db is not None else None
 resets_col = db["password_resets"] if db is not None else None
+system_col = db["system"] if db is not None else None  # F93: single doc tracking pulse scanner health
 
 # Password reset configuration (F66)
 RESET_TOKEN_TTL_MINUTES = 60
@@ -179,6 +181,10 @@ CONTACT_NOTIFY_AFTER_DAYS = 3
 # F86: Account lockout after repeated failed logins
 MAX_LOGIN_ATTEMPTS = 5
 LOCKOUT_MINUTES = 15
+
+# F93: Pulse scanner is considered unhealthy if it hasn't run within this window.
+# Scanner runs hourly, so 2 hours allows for one missed cycle before alerting.
+PULSE_SCAN_UNHEALTHY_AFTER_HOURS = 2
 
 # F97: Common passwords list (top 100 from breach databases)
 COMMON_PASSWORDS = {
@@ -946,8 +952,10 @@ def run_pulse_scan():
     """
     logger.info("Pulse scan running")
     now = now_utc()
+    vaults_checked = 0
 
     for vault_doc in vaults_col.find({}):
+        vaults_checked += 1
         user_id = vault_doc.get("userId")
         if not user_id:
             continue
@@ -997,6 +1005,14 @@ def run_pulse_scan():
                 )
                 logger.info(f"F60: reminderSent set for {user.get('username', user_id)}")
 
+    # F93: record heartbeat so /health can detect a silently-dead scanner
+    if system_col is not None:
+        system_col.update_one(
+            {"_id": "pulse_scanner"},
+            {"$set": {"lastRun": now, "vaultsChecked": vaults_checked}},
+            upsert=True,
+        )
+
     logger.info("Pulse scan complete")
 
 
@@ -1022,7 +1038,34 @@ async def startup():
 
 @app.get("/health")
 def health():
-    return {"ok": True}
+    """
+    F93: Reports whether the hourly pulse scanner is still alive, not just
+    whether the API process is up. Returns HTTP 503 if the scanner hasn't
+    run within PULSE_SCAN_UNHEALTHY_AFTER_HOURS, so uptime monitors (Railway,
+    UptimeRobot, etc.) can alert on a silent failure of the core notification
+    loop without any extra configuration.
+    """
+    body = {"ok": True, "pulseScanner": {"lastRun": None, "vaultsChecked": None, "healthy": False}}
+
+    if system_col is not None:
+        record = system_col.find_one({"_id": "pulse_scanner"})
+        if record is not None:
+            last_run = record.get("lastRun")
+            vaults_checked = record.get("vaultsChecked")
+            age_hours = (now_utc() - last_run).total_seconds() / 3600 if last_run else None
+            healthy = age_hours is not None and age_hours <= PULSE_SCAN_UNHEALTHY_AFTER_HOURS
+
+            body["pulseScanner"] = {
+                "lastRun": last_run.isoformat() if last_run else None,
+                "vaultsChecked": vaults_checked,
+                "healthy": healthy,
+            }
+
+    if not body["pulseScanner"]["healthy"]:
+        body["ok"] = False
+        return JSONResponse(status_code=503, content=body)
+
+    return body
 
 
 @app.post("/auth/login")
@@ -1268,6 +1311,23 @@ def checkin(current_user: dict = Depends(get_current_user)):
 
 
 # ─── ADMIN / TESTING ROUTES ───────────────────────────────────────────────────
+
+@app.post("/admin/force-stale-pulse")
+@limiter.limit("5/minute", key_func=get_user_or_ip)
+def force_stale_pulse(request: Request, current_user: dict = Depends(get_current_user)):
+    """F93: Backdate the pulse scanner heartbeat to simulate a dead scanner. For testing /health's 503 path."""
+    require_admin(current_user)
+    if system_col is not None:
+        system_col.update_one(
+            {"_id": "pulse_scanner"},
+            {"$set": {
+                "lastRun": now_utc() - timedelta(hours=PULSE_SCAN_UNHEALTHY_AFTER_HOURS + 1),
+                "vaultsChecked": 0,
+            }},
+            upsert=True,
+        )
+    return {"ok": True, "message": "Pulse scanner heartbeat backdated to simulate failure"}
+
 
 @app.post("/admin/trigger-pulse")
 @limiter.limit("5/minute", key_func=get_user_or_ip)

@@ -1,15 +1,17 @@
 """
 Emergency Exit — Backend Test Suite
 Run: python3 -m pytest test_main.py -v
-Expected: 192 passed
+Expected: 197 passed
 """
 
 import logging
+import json
 import pytest
 import jwt
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
+from fastapi.responses import JSONResponse
 from bson import ObjectId
 
 import main
@@ -1327,7 +1329,68 @@ class TestSecurityHeaders:
         assert resp.headers.get("Referrer-Policy") == "strict-origin-when-cross-origin"
 
 
-# ─── F96: Vault Sync Input Limits ────────────────────────────────────────────
+# ─── F93: Pulse Scanner Health Monitoring ────────────────────────────────────
+
+class TestPulseScannerHealth:
+    """F93: /health reports whether the hourly pulse scanner is alive, and
+    returns HTTP 503 if it's gone stale (silent failure of the core loop)."""
+
+    def test_healthy_when_recent_run(self):
+        """A scanner that ran a few minutes ago should report healthy with a 200."""
+        fake_record = {"_id": "pulse_scanner", "lastRun": main.now_utc(), "vaultsChecked": 6}
+        with patch.object(main, "system_col") as mock_col:
+            mock_col.find_one.return_value = fake_record
+            result = main.health()
+        assert result["ok"] is True
+        assert result["pulseScanner"]["healthy"] is True
+        assert result["pulseScanner"]["vaultsChecked"] == 6
+
+    def test_unhealthy_when_stale_run(self):
+        """A scanner last seen 3 hours ago (beyond the 2hr threshold) should report unhealthy with a 503."""
+        stale_time = main.now_utc() - timedelta(hours=3)
+        fake_record = {"_id": "pulse_scanner", "lastRun": stale_time, "vaultsChecked": 6}
+        with patch.object(main, "system_col") as mock_col:
+            mock_col.find_one.return_value = fake_record
+            result = main.health()
+        assert isinstance(result, JSONResponse)
+        assert result.status_code == 503
+        body = json.loads(result.body)
+        assert body["ok"] is False
+        assert body["pulseScanner"]["healthy"] is False
+
+    def test_unhealthy_when_no_record_yet(self):
+        """No heartbeat record at all (e.g. fresh deploy, scanner hasn't fired once) should report unhealthy, not assume OK."""
+        with patch.object(main, "system_col") as mock_col:
+            mock_col.find_one.return_value = None
+            result = main.health()
+        assert isinstance(result, JSONResponse)
+        assert result.status_code == 503
+
+    def test_exactly_at_threshold_is_healthy(self):
+        """Boundary check: just inside 2 hours old should still count as healthy (<=, not <)."""
+        # 1 second inside the boundary, not exactly on it — avoids test flakiness from
+        # the few milliseconds of real time that pass between setting this and calling health().
+        boundary_time = main.now_utc() - timedelta(hours=main.PULSE_SCAN_UNHEALTHY_AFTER_HOURS) + timedelta(seconds=1)
+        fake_record = {"_id": "pulse_scanner", "lastRun": boundary_time, "vaultsChecked": 6}
+        with patch.object(main, "system_col") as mock_col:
+            mock_col.find_one.return_value = fake_record
+            result = main.health()
+        assert result["pulseScanner"]["healthy"] is True
+
+    def test_run_pulse_scan_writes_heartbeat(self):
+        """run_pulse_scan() should upsert a heartbeat doc into system_col with a vault count."""
+        with patch.object(main, "system_col") as mock_system_col, \
+             patch.object(main, "vaults_col") as mock_vaults_col, \
+             patch.object(main, "users_col"):
+            mock_vaults_col.find.return_value = []  # no vaults to process — just confirm heartbeat still writes
+            main.run_pulse_scan()
+        mock_system_col.update_one.assert_called_once()
+        args, kwargs = mock_system_col.update_one.call_args
+        assert args[0] == {"_id": "pulse_scanner"}
+        assert "lastRun" in args[1]["$set"]
+        assert args[1]["$set"]["vaultsChecked"] == 0
+        assert kwargs.get("upsert") is True
+
 
 class TestVaultSyncLimits:
     """F96: Validate payload size limits on vault sync."""

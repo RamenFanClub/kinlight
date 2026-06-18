@@ -155,7 +155,7 @@ The `index.html` includes a login wall:
 cd identity-service
 python3 -m pytest test_main.py -v
 ```
-Expected output: `181 passed` — if any fail, fix before pushing.
+Expected output: `197 passed` — if any fail, fix before pushing.
 
 ---
 
@@ -268,7 +268,7 @@ The backend is on Railway (`emergency-exit-production.up.railway.app`), NOT the 
 - send_allclear_email() — sends warm recovery email via Resend SDK
 - send_nomination_email() — F63: sends nomination email to newly-added contact
 - get_contacts_to_notify() — protocol logic (ping_then_notify / notify_immediately / escalate)
-- run_pulse_scan() — hourly scanner, detects overdue vaults, triggers emails with PDF
+- run_pulse_scan() — hourly scanner, detects overdue vaults, triggers emails with PDF, writes F93 heartbeat to system_col on every run
 - All API routes
 - startup() — creates MongoDB indexes on boot
 - F60: is_reminder_due() — checks 25% threshold, guards with reminderSent flag
@@ -306,6 +306,7 @@ The backend is on Railway (`emergency-exit-production.up.railway.app`), NOT the 
 | POST | `/admin/trigger-pulse` | Yes | Manually trigger the pulse scan immediately (testing) |
 | POST | `/admin/force-overdue` | Yes | Set vault lastCheckin to 2020 to simulate overdue state (testing) |
 | POST | `/admin/force-reminder` | Yes | Set vault lastCheckin to just inside reminder threshold for F60 testing |
+| POST | `/admin/force-stale-pulse` | Yes | F93: Backdate the pulse scanner heartbeat to simulate a dead scanner, for testing /health's 503 path |
 
 ### Environment Variables (set in Railway dashboard, never committed)
 ```
@@ -393,7 +394,7 @@ notes, isTester, isAdmin, createdAt, lastLogin
 
 **File:** `identity-service/test_main.py`
 **Run:** `python3 -m pytest test_main.py -v`
-**Expected:** 164 passed
+**Expected:** 197 passed
 
 ### Coverage by feature
 
@@ -422,6 +423,7 @@ notes, isTester, isAdmin, createdAt, lastLogin
 | `TestSecurityHeaders` | F94 security response headers — middleware registered, X-Content-Type-Options, X-Frame-Options, HSTS, Referrer-Policy (async direct call, no TestClient) | 5 |
 | `TestVaultSyncLimits` | F96 vault sync input limits — max assets, max contacts, type check, valid payload | 4 |
 | `TestStrongerPasswordPolicy` | F97 password policy — common passwords, alpha-only, length, valid, case-insensitive, empty/None | 6 |
+| `TestPulseScannerHealth` | F93 pulse scanner heartbeat — healthy/unhealthy thresholds, 503 on stale or missing heartbeat, boundary case, heartbeat write on scan | 5 |
 
 ### Frontend test coverage
 F44, F45, and other frontend features are not covered by the pytest suite — pytest only covers the Python backend. Frontend test coverage requires a browser automation tool (e.g. Playwright). This is tracked as a future infrastructure task. See F58 in the backlog.
@@ -567,7 +569,7 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 | F90 | Add dependency vulnerability scanning to CI | Should | done | **OWASP A06 — Vulnerable Components.** New "Dependency Audit (pip-audit)" job added to `ci.yml`. Runs `pip-audit -r requirements.txt --desc` on every push. Fails CI if any dependency has a known CVE. |
 | F91 | Rate limiting on all endpoints | Should | done | **OWASP A07 — Auth Failures.** Implemented June 2026 with `slowapi`. `POST /auth/login` 5/min per IP, `POST /auth/request-reset` 3/min per IP (the endpoint flagged in the June 2026 review as the highest-priority gap — previously sent a real email on every call with no cooldown, risking inbox spam or Resend quota exhaustion), `POST /contact/nominate` 10/min per authenticated user, all four `/admin/*` test-trigger endpoints 5/min per authenticated user. **Railway IP detection:** Railway sits behind a proxy whose IP-forwarding behavior has changed inconsistently (per Railway's own engineering team); `request.client.host` would see Railway's internal IP, not the real visitor. Built a custom key function reading `X-Forwarded-For` and taking the leftmost IP — confirmed by Railway as the most reliable signal across their routing changes. A second key function buckets by authenticated user ID (not IP) for `/contact/nominate` and the admin endpoints, so users sharing a network don't share a limit. **Found and fixed during implementation:** `contact_nominate` was directly unit-tested as a plain function (no HTTP layer) — `slowapi`'s decorator requires a real `Request` object, which broke 5 existing tests. Resolved by splitting into a pure `contact_nominate()` (unchanged, all original tests pass untouched) plus a thin rate-limited `contact_nominate_route()` wrapper. 6 new integration tests added using `TestClient` to verify limits actually trigger over real HTTP (not just that decorators compile) — confirms per-IP and per-user bucket isolation and leftmost-IP extraction. |
 | F92 | Enable GitHub branch protection on main | Should | done | **OWASP A08 — Software Integrity.** Branch protection rule created on `main`: "Require status checks to pass before merging" enabled. All 4 CI jobs (pytest, sync check, Playwright, pip-audit) must pass. PRs not required (solo dev). |
-| F93 | Pulse scanner health monitoring | Should | backlog | **OWASP A09 — Logging Failures.** No way to detect if the hourly pulse scanner stops running silently. Write `lastPulseScan` timestamp to MongoDB, expose on `/health`. If scanner dies, Kinlight's core promise is broken with no one knowing. ~1 hr. **Tier 2.** |
+| F93 | Pulse scanner health monitoring | Should | done | **OWASP A09 — Logging Failures.** Single global heartbeat document (`system` collection, `_id: "pulse_scanner"`) updated at the end of every `run_pulse_scan()` run with `lastRun` timestamp + `vaultsChecked` count. `/health` now reports `pulseScanner: {lastRun, vaultsChecked, healthy}` and returns **HTTP 503** (not just `ok: false` in the body) if the scanner hasn't run within `PULSE_SCAN_UNHEALTHY_AFTER_HOURS` (2 hours — one missed hourly cycle of headroom) or has never run at all. The 503 means uptime monitors (Railway's built-in check, UptimeRobot, etc.) can alert automatically with zero extra config, since they typically only check HTTP status, not response body. New testing endpoint `POST /admin/force-stale-pulse` backdates the heartbeat to simulate a dead scanner without waiting 2+ hours. 5 new pytest tests (`TestPulseScannerHealth`, 197 total). |
 
 ---
 
@@ -639,7 +641,7 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 - [ ] Replace `identity-service/main.py` in VS Code
 - [ ] Replace `identity-service/test_main.py` in VS Code
 - [ ] `cp index.html frontend/index.html`
-- [ ] Run `python3 -m pytest test_main.py -v` — confirm 181 passed before pushing
+- [ ] Run `python3 -m pytest test_main.py -v` — confirm 197 passed before pushing
 - [ ] `git add -A`
 - [ ] `git commit -m "..."`
 - [ ] `git push`
