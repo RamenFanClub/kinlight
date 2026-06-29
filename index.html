@@ -229,6 +229,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 .nq-waiting{background:rgba(216,150,48,.08);color:#9a6c1a;border:1px solid rgba(216,150,48,.25);}
 .nq-generate{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:12px 16px;border-radius:10px;border:1.5px solid rgba(186,26,26,.25);background:rgba(186,26,26,.04);cursor:pointer;font-family:var(--fb);font-size:13px;font-weight:700;color:var(--er);transition:all .18s;margin-top:8px;}
 .nq-generate:active{background:rgba(186,26,26,.1);transform:scale(.98);}
+.nq-test{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:12px 16px;border-radius:10px;border:1.5px solid rgba(90,122,110,.25);background:rgba(90,122,110,.04);cursor:pointer;font-family:var(--fb);font-size:13px;font-weight:700;color:var(--ac);transition:all .18s;margin-top:8px;}
+.nq-test:active{background:rgba(90,122,110,.1);transform:scale(.98);}
 
 /* ─── OVERDUE BANNER ─────────────────────────────────────────────────────── */
 .overdue-banner{background:linear-gradient(135deg,#8b1a1a 0%,#ba1a1a 100%);border-radius:var(--rc);padding:18px 16px;margin-bottom:14px;box-shadow:0 4px 20px rgba(186,26,26,.25);border-bottom:3px solid rgba(0,0,0,.18);animation:overdue-pulse 3s ease-in-out infinite;}
@@ -701,6 +703,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
     </div>
     <div id="nq-full-list"></div>
     <button class="nq-generate" onclick="generateAllPDFs()" style="margin-bottom:12px;"><span class="m" style="font-size:16px;">picture_as_pdf</span>Preview all packages (nothing is sent)</button>
+    <button class="nq-test" onclick="testNotification()" style="margin-bottom:12px;"><span class="m" style="font-size:16px;">send</span>Send me a test notification</button>
     <div class="mr">
       <button class="cxb" onclick="closeM()" style="flex:1;">Close</button>
       <button class="cfb" onclick="checkin();closeM();" style="flex:2;">I'm okay — check in now</button>
@@ -1240,6 +1243,19 @@ function generateAllPDFs(){
   toast(pl(S.kin.length,'package')+' generated ✓');
 }
 
+// ─── F06: TEST NOTIFICATION ──────────────────────────────────────────────────────
+async function testNotification(){
+  if(!S.kin.length){toast('Add a contact first');return;}
+  const token=sessionStorage.getItem('ee_token');
+  if(!token){toast('Please log in first');return;}
+  try{
+    const res=await fetch(API+'/test-notification',{method:'POST',headers:{...authHeader(),'Content-Type':'application/json'}});
+    const data=await res.json();
+    if(res.ok){toast('Test notification sent ✓');log('Test notification sent');}
+    else{toast(data.detail||'Failed to send test notification');}
+  }catch(e){toast('Could not reach server');}
+}
+
 // ─── PDF GENERATION ──────────────────────────────────────────────────────────
 function generatePDF(kinId) {
   if (typeof window.jspdf === 'undefined') { toast('PDF library not loaded yet — try again'); return; }
@@ -1391,6 +1407,7 @@ function render(){
       }).join('')}
       ${queue.length>3?`<div style="text-align:center;font-size:11px;color:var(--ov);padding:4px 0;">+ ${queue.length-3} more contact${queue.length-3!==1?'s':''}</div>`:''}
       <button class="nq-generate" onclick="generateAllPDFs()"><span class="m" style="font-size:16px;">picture_as_pdf</span>Preview all packages (nothing is sent)</button>
+      <button class="nq-test" onclick="testNotification()"><span class="m" style="font-size:16px;">send</span>Send me a test notification</button>
     </div>`;
   } else {
     $('home-nq').style.display = 'none';

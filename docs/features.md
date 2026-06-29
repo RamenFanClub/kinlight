@@ -81,7 +81,7 @@ Status key: `idea` → `specified` → `in-progress` → `done`
 
 | ID | User Story | Priority | Status | Notes |
 |----|-----------|----------|--------|-------|
-| F06 | Vault-owner "send me a test notification" button | Could | specified | Admin endpoints (`/admin/force-overdue` + `/admin/trigger-pulse`) cover the dev/testing need. The remaining gap is a production-facing button so real users can verify their notification setup without accessing `/docs`. Small addition to the notification queue modal. Defer until pre-launch. |
+| F06 | Vault-owner "send me a test notification" button | Could | done | **New button in Notification Queue modal** — sends the vault holder a real email with a sample PDF (uses first contact's data) so they can verify the notification pipeline works. New `POST /test-notification` endpoint (rate-limited 5/min, requires auth, checks vault+contacts+email). Does NOT modify vault state. Styled with sage accent to distinguish from "Preview" button. Requires user accounts to have an `email` field in MongoDB — testers + admin need `update_tester_emails.py` run once. |
 | F09 | Auto-generated action checklist in PDF | Could | done | Page 2 of PDF. |
 | F12 | Physical Emergency Access Card (QR code) | Could | idea | |
 | F13 | Advance Care Directive | Could | idea | |

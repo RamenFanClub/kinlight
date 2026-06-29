@@ -1271,6 +1271,60 @@ def contact_nominate_route(request: Request, body: dict, current_user: dict = De
 
 
 
+@app.post("/test-notification")
+@limiter.limit("5/minute", key_func=get_user_or_ip)
+def test_notification(request: Request, current_user: dict = Depends(get_current_user)):
+    """
+    F06: Send a test notification email to the vault holder so they can
+    verify their notification pipeline works. Uses the first contact's
+    data to generate a sample PDF. Does NOT modify vault state.
+    """
+    holder_email = current_user.get("email", "").strip()
+    if not holder_email:
+        raise HTTPException(status_code=400, detail="No email address on your account. An admin can add one for you.")
+
+    holder_name = current_user.get("name", "Kinlight User")
+
+    vault_doc = vaults_col.find_one({"userId": current_user["_id"]})
+    if not vault_doc:
+        raise HTTPException(status_code=400, detail="No vault found — create some content first")
+
+    vault_content: dict = decrypt_content(vault_doc.get("content", {}))
+    contacts: list = vault_content.get("kin") or []
+    if not contacts:
+        raise HTTPException(status_code=400, detail="No contacts in vault — add a contact first")
+
+    sample = contacts[0]
+    first = sample.get("first", "")
+    last = sample.get("last", "")
+
+    pdf_bytes = generate_pdf_for_contact(sample, vault_doc, holder_name)
+    attachment = {
+        "filename": f"Kinlight-Test-{first}-{last}.pdf",
+        "content": base64.b64encode(pdf_bytes).decode("utf-8"),
+    }
+
+    body = f"""Hi {holder_name},
+
+This is a test notification from Kinlight.
+
+If this were a real notification, your contact {first} {last} would receive the attached package. No contacts have been notified — this is just a test verifying that your notification pipeline is working correctly.
+
+To change what your contacts would receive, edit your vault content (assets, wishes, Will details, and personal letters).
+
+— The Kinlight team
+"""
+
+    subject = "Kinlight — test notification"
+    sent = _send_email(holder_email, subject, body, attachment)
+
+    if not sent:
+        raise HTTPException(status_code=500, detail="Failed to send test email. Check server logs.")
+
+    logger.info(f"Test notification sent to {holder_email} for user {current_user.get('username','')}")
+    return {"ok": True, "message": f"Test notification sent to {holder_email}"}
+
+
 @app.post("/checkin")
 def checkin(current_user: dict = Depends(get_current_user)):
     """
