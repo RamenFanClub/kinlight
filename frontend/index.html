@@ -616,6 +616,13 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
     <div id="s-config" class="scr">
       <div class="ph">Settings</div>
       <div class="ps">Set how often you check in and what happens if you don't.</div>
+      <div class="card"><div class="st" style="margin-bottom:10px;"><span class="m mf" style="font-size:17px;color:var(--sec);">person</span>Account</div>
+        <div style="background:var(--w);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:6px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-size:11px;color:var(--ov);">Username</span><span id="acct-user" style="font-size:13px;font-weight:600;color:var(--p);">—</span></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-size:11px;color:var(--ov);">Name</span><span id="acct-name" style="font-size:13px;font-weight:600;color:var(--p);">—</span></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-size:11px;color:var(--ov);">Email</span><span id="acct-email" style="font-size:13px;font-weight:600;color:var(--p);">—</span></div>
+        </div>
+      </div>
       <div class="card"><div class="st" style="margin-bottom:14px;"><span class="m mf" style="font-size:17px;color:var(--sec);">pulse_alert</span>Check in every</div><div style="background:var(--w);border-radius:12px;padding:14px;"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;"><span style="font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--sec);">Interval</span><div class="tg"><button class="to" id="tw" onclick="setU('weeks')">Weeks</button><button class="to on" id="tm" onclick="setU('months')">Months</button></div></div><div class="cc"><button class="cb" onclick="adj(-1)">−</button><div><div class="cv" id="fc">2</div><div class="cu" id="fu">Months</div></div><button class="cb" onclick="adj(1)">+</button></div><div id="next-due-line" style="margin-top:12px;font-size:12px;color:var(--ov);text-align:center;"></div><div id="freq-grace-warn" style="display:none;margin-top:8px;font-size:12px;color:var(--am);text-align:center;padding:6px 10px;background:var(--am-bg);border-radius:8px;border:1px solid var(--am-border);"></div></div></div>
       <div class="card"><div class="st" style="margin-bottom:14px;"><span class="m" style="font-size:17px;color:var(--sec);">hourglass_bottom</span>Grace Period</div>
         <div style="background:var(--w);border-radius:12px;padding:14px;">
@@ -1574,6 +1581,12 @@ function render(){
     }).join('');
 
   // ── Settings ──────────────────────────────────────────────────────────────
+  try{
+    const u=JSON.parse(sessionStorage.getItem('ee_user')||'{}');
+    $('acct-user').textContent=u.username||'—';
+    $('acct-name').textContent=u.name||'—';
+    $('acct-email').textContent=u.email||'—';
+  }catch(e){}
   fCount=S.fc||2;fUnit=S.fu||'months';
   $('fc').textContent=fCount;$('fu').textContent=fUnit.charAt(0).toUpperCase()+fUnit.slice(1);
   $('tw').classList.toggle('on',fUnit==='weeks');$('tm').classList.toggle('on',fUnit==='months');
