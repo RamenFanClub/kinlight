@@ -125,6 +125,7 @@ app.add_middleware(
     allow_origins=[
         "https://kinlight.app",
         "https://ramenfanclub.github.io",
+        "https://api.kinlight.app",
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -1052,7 +1053,7 @@ def health():
         if record is not None:
             last_run = record.get("lastRun")
             vaults_checked = record.get("vaultsChecked")
-            age_hours = (now_utc() - last_run).total_seconds() / 3600 if last_run else None
+            age_hours = (now_utc() - ensure_utc(last_run)).total_seconds() / 3600 if last_run else None
             healthy = age_hours is not None and age_hours <= PULSE_SCAN_UNHEALTHY_AFTER_HOURS
 
             body["pulseScanner"] = {
