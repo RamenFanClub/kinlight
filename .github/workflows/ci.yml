@@ -146,3 +146,36 @@ jobs:
         working-directory: identity-service
         run: |
           pip-audit -r requirements.txt --desc
+
+  # ─── JOB 5: DEPLOY TO GCE ────────────────────────────────────────────────
+  # SSHes into the GCE VM, pulls latest code, rebuilds Docker container.
+  # Runs only on push to main (not on PRs).
+  deploy:
+    name: Deploy to GCE
+    needs: [backend-tests, frontend-sync, frontend-tests, dependency-audit]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Deploy to VM
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.GCE_HOST }}
+          username: ${{ secrets.GCE_USER }}
+          key: ${{ secrets.GCE_SSH_KEY }}
+          script: |
+            cd ~/kinlight
+            git pull
+            cd identity-service
+            docker build --pull -t kinlight-api .
+            docker stop kinlight-app 2>/dev/null || true
+            docker rm kinlight-app 2>/dev/null || true
+            docker run -d --restart=unless-stopped --name kinlight-app \
+              -p 127.0.0.1:8001:8001 \
+              -e PORT=8001 \
+              -e MONGO_URI='${{ secrets.MONGO_URI }}' \
+              -e JWT_SECRET='${{ secrets.JWT_SECRET }}' \
+              -e RESEND_API_KEY='${{ secrets.RESEND_API_KEY }}' \
+              -e VAULT_ENCRYPTION_KEY='${{ secrets.VAULT_ENCRYPTION_KEY }}' \
+              kinlight-api
+            docker image prune -af --filter "until=24h"

@@ -20,7 +20,7 @@ The `index.html` includes a login wall:
 - **Token** stored in `sessionStorage` (clears when browser tab closes)
 - **"Sign out"** button in the header
 - **"Hi, [Name]"** greeting shown after login
-- **API calls** point to `https://emergency-exit-production.up.railway.app`
+- **API calls** point to `https://api.kinlight.app`
 - **Enter key** submits the login form
 - **Session persistence** — if token exists in sessionStorage, login wall is skipped
 - **Tester accounts:** tester_01 through tester_06, all share password `Benny#07`
@@ -39,7 +39,7 @@ The `index.html` includes a login wall:
 - `doLogout()` — clears session, resets state, shows login wall
 - `showApp(user)` — async; awaits `loadFromServer()` before calling `render()`
 - `loadFromServer()` — async; fetches `GET /vault`, falls back to localStorage if server unreachable
-- `API` constant — set to `https://emergency-exit-production.up.railway.app`
+- `API` constant — set to `https://api.kinlight.app`
 
 ---
 
@@ -114,7 +114,7 @@ The `index.html` includes a login wall:
 - **PDF attachment** (F39-4): ReportLab generates server-side PDF; attached to notification email via Resend REST API (direct HTTP, not SDK). PDF mirrors the 6-page jsPDF client-side package.
 - jsPDF (via CDN) for client-side PDF generation (unchanged)
 - **Frontend:** GitHub Pages (`ramenfanclub.github.io/emergency-exit`) — auto-deploys on `git push`
-- **Backend:** Railway (`emergency-exit-production.up.railway.app`) — auto-deploys on `git push`
+- **Backend:** GCE e2-micro free tier (`api.kinlight.app`) — auto-deploys on `git push` via GitHub Actions SSH
 - **Database:** MongoDB Atlas on Google Cloud
 - **Email provider:** Resend (`resend.com`) — free tier, 100 emails/day
 - **CI:** GitHub Actions — `.github/workflows/ci.yml` runs 4 jobs on every push to `main`: pytest, frontend sync check, Playwright browser tests, pip-audit dependency scan
@@ -156,7 +156,7 @@ The `index.html` includes a login wall:
 cd identity-service
 python3 -m pytest test_main.py -v
 ```
-Expected output: `197 passed` — if any fail, fix before pushing.
+Expected output: `205 passed` — if any fail, fix before pushing.
 
 ---
 
@@ -252,9 +252,9 @@ Active tab: linen cream icon/label on charcoal pill. Inactive: charcoal at 35% o
 
 ---
 
-## Backend (Identity Service on Railway)
+## Backend (Identity Service on GCE)
 
-The backend is on Railway (`emergency-exit-production.up.railway.app`), NOT the VM. The Google Cloud VM (`e2-micro`) is no longer used and can be shut down.
+The backend is on Google Compute Engine free tier (`api.kinlight.app`) — an e2-micro VM in us-west1 running Docker + nginx + certbot.
 
 ### identity-service/main.py structure
 ```
@@ -317,7 +317,7 @@ RESEND_API_KEY=re_...
 ```
 
 ### Testing the pulse scanner end-to-end
-1. Go to `https://emergency-exit-production.up.railway.app/docs`
+1. Go to `https://api.kinlight.app/docs`
 2. Login via `POST /auth/login` → copy the token
 3. Click Authorize (top right) → paste `Bearer <token>` → Authorize
 4. `POST /admin/force-overdue` — sets vault to overdue
@@ -395,7 +395,7 @@ notes, isTester, isAdmin, createdAt, lastLogin
 
 **File:** `identity-service/test_main.py`
 **Run:** `python3 -m pytest test_main.py -v`
-**Expected:** 197 passed
+**Expected:** 205 passed
 
 ### Coverage by feature
 
@@ -457,7 +457,7 @@ When building a new feature, add a new `class TestFeatureName` block to `test_ma
 - Separate localStorage flags (outside `ee_v3`) used for one-time UI state: `ee_onboarded`
 - When editing index.html, always update BOTH `./index.html` AND `./frontend/index.html`
 - jsPDF loaded via CDN in `<head>`
-- `API` constant in JS points to `https://emergency-exit-production.up.railway.app`
+- `API` constant in JS points to `https://api.kinlight.app`
 - Login token stored in `sessionStorage` (not localStorage — clears on tab close)
 - Vault sync is silent — never show errors to the user if sync fails
 - **F41 fallback pattern:** use `_get_content_or_legacy(doc, key, fallback)` helper — do not inline the None-check pattern again
@@ -512,7 +512,7 @@ When building a new feature, add a new `class TestFeatureName` block to `test_ma
 - [ ] Replace `identity-service/main.py` in VS Code
 - [ ] Replace `identity-service/test_main.py` in VS Code
 - [ ] `cp index.html frontend/index.html`
-- [ ] Run `./test.sh` — confirm 197 passed before pushing
+- [ ] Run `./test.sh` — confirm 205 passed before pushing
 - [ ] `git add -A`
 - [ ] `git commit -m "..."`
 - [ ] `git push`

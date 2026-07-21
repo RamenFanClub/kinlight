@@ -9,7 +9,7 @@
 ## Before pushing
 
 ```bash
-./test.sh   # Runs pytest — must be 197 passed
+./test.sh   # Runs pytest — must be 205 passed
 cp index.html frontend/index.html   # Keep both copies in sync
 ```
 
@@ -20,7 +20,7 @@ cp index.html frontend/index.html   # Keep both copies in sync
 | Layer | Where | Notes |
 |-------|-------|-------|
 | Frontend | `./index.html` + `./frontend/index.html` | Single-file HTML/CSS/JS. GitHub Pages (`ramenfanclub.github.io/emergency-exit` → `kinlight.app`) |
-| Backend | `identity-service/main.py` | Python FastAPI. Railway (`emergency-exit-production.up.railway.app`) |
+| Backend | `identity-service/main.py` | Python FastAPI. GCE e2-micro (`api.kinlight.app`) |
 | Database | MongoDB Atlas | Users + vaults collections |
 | Email | Resend (`resend.com`) | From `hello@kinlight.app` |
 | CI/CD | `.github/workflows/ci.yml` | 4 jobs: pytest, sync check, Playwright, pip-audit |
@@ -29,7 +29,7 @@ cp index.html frontend/index.html   # Keep both copies in sync
 
 ## Critical constants (frontend)
 
-- **API base:** `https://emergency-exit-production.up.railway.app`
+- **API base:** `https://api.kinlight.app`
 - **localStorage key:** `ee_v3` (vault data, offline cache)
 - **Session token:** `sessionStorage` (JWT, clears on tab close)
 - **Separate localStorage flags:** `ee_onboarded` (outside `ee_v3`)

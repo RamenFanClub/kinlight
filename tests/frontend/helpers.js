@@ -15,7 +15,7 @@
  *   5. await loginViaUI(page)        ← now login will work
  */
 
-const API_BASE = 'https://emergency-exit-production.up.railway.app';
+const API_BASE = 'https://api.kinlight.app';
 
 /**
  * Mock all API calls so tests don't need the real backend.
