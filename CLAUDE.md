@@ -12,6 +12,67 @@
 
 ---
 
+## 🔴 ACTIVE CHECKPOINT — F100/F101 (PWA + Push Notifications)
+
+> **Last updated:** 27 July 2026
+> **Status:** Code complete (214 tests pass). Pushed to GitHub. **VAPID keys NOT yet configured on GCE.**
+
+### What was built
+- **F100 (PWA):** `manifest.json`, `sw.js`, app icons, offline caching, offline check-in awareness
+- **F101 (Push):** Backend push endpoints (`GET /push/key`, `POST /push/subscribe`, `POST /push/unsubscribe`), `pywebpush` dependency, `send_push_to_user()` called alongside all email triggers, push toggle in Settings UI
+
+### Files changed (all committed + pushed)
+- **New:** `manifest.json`, `sw.js`, `favicon.svg`, `icon-192.png`, `icon-512.png` (both root + `frontend/`)
+- **Modified:** `index.html`, `frontend/index.html`, `identity-service/main.py`, `identity-service/test_main.py`, `identity-service/requirements.txt`, `.github/workflows/ci.yml`, `.env.example`
+- **Docs updated:** `CLAUDE.md`, `AGENTS.md`, `docs/features.md`, `docs/gce-deployment-guide.md`
+
+### What still needs to be done (in order)
+
+**Step 1 — SSH into the GCE VM and get the VAPID keys**
+The first deploy ran without `VAPID_PRIVATE_KEY`/`VAPID_PUBLIC_KEY` env vars, so the server generated a new pair at startup and logged them. Retrieve them:
+1. SSH into the GCE VM (browser SSH: GCP Console → Compute Engine → VM → SSH button)
+2. Run: `docker logs kinlight-app 2>&1 | grep "F101"`
+3. You'll see a line like: `WARNING: F101: VAPID keys not found in env — generated new pair. Add VAPID_PRIVATE_KEY and VAPID_PUBLIC_KEY to your env vars. Public: BGxl88k2a...`
+4. Copy both the private key and public key (both are long URL-safe base64 strings)
+
+**Step 2 — Add the keys as GitHub Secrets**
+1. Go to `https://github.com/RamenFanClub/kinlight` → Settings → Secrets and variables → Actions
+2. Add **New repository secret:** `VAPID_PRIVATE_KEY` ← the private key string
+3. Add **New repository secret:** `VAPID_PUBLIC_KEY` ← the public key string
+
+**Step 3 — Update CI to pass the keys to Docker**
+In `.github/workflows/ci.yml`, add these two lines inside the `docker run` command (after line 193):
+```
+-e VAPID_PRIVATE_KEY='${{ secrets.VAPID_PRIVATE_KEY }}' \
+-e VAPID_PUBLIC_KEY='${{ secrets.VAPID_PUBLIC_KEY }}' \
+```
+
+**Step 4 — Push to redeploy**
+```bash
+git add .github/workflows/ci.yml && git commit -m "Add VAPID env vars to GCE deploy" && git push
+```
+The server now starts with stable VAPID keys. The WARNING disappears.
+Run: `./test.sh` — must pass 214 before pushing.
+
+**Step 5 — Test on phone**
+1. Open `https://kinlight.app` on your phone
+2. Install to home screen (Chrome: Menu → Add to Home Screen / Safari: Share → Add to Home Screen)
+3. Open the installed app, log in
+4. Go to Settings → toggle "Enable push notifications"
+5. Grant permission when prompted
+
+### Key reminders
+- VAPID keys must NOT change between deploys (old push subscriptions break)
+- On iOS, push only works after installing to home screen (Safari limitation — not a bug)
+- The `pass` flag in offline check-in is `ee_pending_checkin` in localStorage
+- CI sync check now verifies PWA files too — keep them in sync after index.html edits:
+  ```bash
+  cp index.html frontend/index.html
+  cp manifest.json sw.js favicon.svg icon-192.png icon-512.png frontend/
+  ```
+
+---
+
 ## Login (Frontend)
 
 The `index.html` includes a login wall:
