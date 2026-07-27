@@ -8,6 +8,10 @@
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" integrity="sha384-xscEkekms/SQq5SFOOIcbfflRgUup5sdW1duER21mIKxWcHi9Xyv37aIOSrCepJf" crossorigin="anonymous"></script>
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com 'unsafe-inline'; style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; font-src https://fonts.gstatic.com https://fonts.googleapis.com; connect-src 'self' https://api.kinlight.app; img-src 'self' data:; object-src 'none'; base-uri 'self'"/>
+<meta name="theme-color" content="#2e2b26">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <script>
 const API='https://api.kinlight.app';
 </script>
@@ -645,6 +649,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
           <div class="rl"><span class="m" style="font-size:19px;color:var(--sec);">escalator</span><div><span style="font-weight:600;font-size:14px;color:var(--p);display:block;">Notify contacts one at a time</span><span style="font-size:11px;color:var(--ov);">One contact at a time, 24 hours apart</span></div></div>
           <div class="rd" id="rp-3"></div>
         </div>
+             </div>
+      <div class="card"><div class="st" style="margin-bottom:14px;"><span class="m" style="font-size:17px;color:var(--sec);">phone_android</span>Push Notifications</div>
+        <div style="font-size:12px;color:var(--ov);margin-bottom:12px;line-height:1.5;">Get alerts on your phone when check-in is due or your contacts are notified. Works after adding Kinlight to your home screen.</div>
+        <button class="ob" id="push-toggle-btn" style="width:100%;justify-content:center;padding:12px;" onclick="togglePush()"><span class="m" style="font-size:18px;">notifications</span><span id="push-label">Enable push notifications</span></button>
+        <div id="push-status" style="font-size:11px;color:var(--ac);margin-top:8px;text-align:center;display:none;"></div>
       </div>
       <div class="card"><div class="st" style="margin-bottom:14px;"><span class="m mf" style="font-size:17px;color:var(--sec);">verified_user</span>Verification</div><div class="ri" style="opacity:0.45;cursor:default;pointer-events:none;"><div class="rl"><span class="m" style="font-size:19px;color:var(--sec);">face</span><div><span style="font-weight:600;font-size:15px;color:var(--p);">FaceID / Biometrics</span><span style="display:block;font-size:11px;color:var(--ov);margin-top:2px;">Coming soon</span></div></div><div class="rd" id="rf"></div></div><div class="ri" onclick="setV('pin')"><div class="rl"><span class="m" style="font-size:19px;color:var(--sec);">password</span><span style="font-weight:600;font-size:15px;color:var(--p);">Secure Passcode</span></div><div class="rd on" id="rp2"></div></div></div>
       <div class="card"><div class="st" style="margin-bottom:14px;"><span class="m" style="font-size:17px;color:var(--sec);">download</span>Your Data</div>
@@ -765,7 +774,7 @@ const PRI_COLORS = {high:'td',medium:'ts',low:'ta'};
 const DEFAULT_STATE = {
   assets:[],wishes:[],kin:[],will:null,suppDocs:[],
   lastCheckin:null,fc:2,fu:'months',gp:7,
-  v:'face',notifySeq:'in_order',notifyProto:'ping_then_notify',
+  v:'face',notifySeq:'in_order',notifyProto:'ping_then_notify',pushSubscribed:false,
   log:[],saveCount:0
 };
 let S = {...DEFAULT_STATE};
@@ -809,6 +818,10 @@ async function showApp(user){
   g.textContent='Hi, '+user.name.split(' ')[0];
   g.classList.add('on');
   await loadFromServer();
+  if(navigator.onLine && localStorage.getItem('ee_pending_checkin')){
+    localStorage.removeItem('ee_pending_checkin');
+    S.lastCheckin=Date.now();log('Check-in confirmed — alive');save();serverCheckin();
+  }
   render();
   // F67: if user arrived via reminder email link, show the checkin prompt on home
   if(sessionStorage.getItem('ee_checkin_intent')){
@@ -894,6 +907,17 @@ document.addEventListener('DOMContentLoaded',async ()=>{
   const token=sessionStorage.getItem('ee_token');
   const user=sessionStorage.getItem('ee_user');
   if(token&&user){await showApp(JSON.parse(user));}
+});
+
+// ─── F100: OFFLINE-AWARE SYNC ─────────────────────────────────────────────────
+window.addEventListener('online',()=>{
+  if(localStorage.getItem('ee_pending_checkin')){
+    localStorage.removeItem('ee_pending_checkin');
+    serverCheckin();
+    syncVault();
+    toast('Back online \u2014 check-in synced \u2713');
+  }
+  renderPushToggle();
 });
 
 // ─── PERSISTENCE ──────────────────────────────────────────────────────────────
@@ -1207,7 +1231,12 @@ function saveLetter(){
 // ─── CHECK-IN ─────────────────────────────────────────────────────────────────
 function checkin(){
   const isFirst=!localStorage.getItem('ee_first_checkin_done');
-  S.lastCheckin=Date.now();log('Check-in confirmed — alive');save();serverCheckin();
+  S.lastCheckin=Date.now();log('Check-in confirmed — alive');save();
+  if(navigator.onLine){
+    serverCheckin();
+  }else{
+    localStorage.setItem('ee_pending_checkin','1');
+  }
   if(isFirst){
     localStorage.setItem('ee_first_checkin_done','true');
     $('milestone-modal').style.display='flex';
@@ -1632,6 +1661,149 @@ function render(){
   $('rp-1').className='rd'+(S.notifyProto==='ping_then_notify'?' on':'');
   $('rp-2').className='rd'+(S.notifyProto==='notify_immediately'?' on':'');
   $('rp-3').className='rd'+(S.notifyProto==='escalate'?' on':'');
+  renderPushToggle();
+}
+
+// ─── F100 / F101: PUSH NOTIFICATIONS + SERVICE WORKER ─────────────────────────
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('/sw.js').then(reg => {
+    reg.addEventListener('updatefound', () => {
+      const w = reg.installing;
+      if(w){
+        w.addEventListener('statechange', () => {
+          if(w.state === 'activated' && navigator.serviceWorker.controller){
+            reg.active.postMessage({type:'SKIP_WAITING'});
+          }
+        });
+      }
+    });
+    navigator.serviceWorker.addEventListener('message', e => {
+      if(e.data && e.data.type === 'SW_ACTIVATED'){
+        if(S.pushSubscribed) subscribeToPush().catch(()=>{});
+      }
+    });
+  }).catch(() => {});
+}
+
+function urlBase64ToUint8Array(base64String){
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for(let i = 0; i < rawData.length; ++i){
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
+async function getVapidPublicKey(){
+  try{
+    const res = await fetch(API+'/push/key');
+    if(res.ok){
+      const data = await res.json();
+      return data.key;
+    }
+  }catch(e){}
+  return null;
+}
+
+async function subscribeToPush(){
+  if(!('serviceWorker' in navigator) || !('PushManager' in window)) return false;
+  const reg = await navigator.serviceWorker.ready;
+  const key = await getVapidPublicKey();
+  if(!key) return false;
+  try{
+    let sub = await reg.pushManager.getSubscription();
+    if(!sub){
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(key)
+      });
+    }
+    const token = sessionStorage.getItem('ee_token');
+    if(!token) return false;
+    await fetch(API+'/push/subscribe', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', ...authHeader()},
+      body: JSON.stringify({subscription: sub.toJSON()})
+    });
+    S.pushSubscribed = true;
+    save();
+    return true;
+  }catch(e){
+    console.warn('Push subscribe failed:', e);
+    return false;
+  }
+}
+
+async function unsubscribeFromPush(){
+  if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+  const reg = await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.getSubscription();
+  if(sub){
+    try{
+      const token = sessionStorage.getItem('ee_token');
+      await fetch(API+'/push/unsubscribe', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', ...authHeader()},
+        body: JSON.stringify({endpoint: sub.endpoint})
+      });
+    }catch(e){}
+    await sub.unsubscribe();
+  }
+  S.pushSubscribed = false;
+  save();
+}
+
+async function togglePush(){
+  if(S.pushSubscribed){
+    await unsubscribeFromPush();
+    toast('Push notifications disabled \u2713');
+  }else{
+    if(Notification.permission === 'denied'){
+      toast('Notifications blocked \u2014 enable in browser settings');
+      return;
+    }
+    const result = await Notification.requestPermission();
+    if(result !== 'granted'){
+      toast('Permission needed for push notifications');
+      return;
+    }
+    const ok = await subscribeToPush();
+    if(ok){
+      toast('Push notifications enabled \u2713');
+    }else{
+      toast('Push setup failed \u2014 try again later');
+    }
+  }
+}
+
+function renderPushToggle(){
+  const btn = $('push-toggle-btn');
+  const label = $('push-label');
+  const status = $('push-status');
+  if(!btn || !label) return;
+  if(S.pushSubscribed && Notification.permission === 'granted'){
+    btn.className = 'ob';
+    btn.style.background = 'var(--al)';
+    btn.style.color = 'var(--ac)';
+    label.textContent = 'Disable push notifications';
+    if(status){ status.style.display = 'block'; status.textContent = 'Push notifications are active \u2713'; }
+  }else{
+    btn.className = 'ob';
+    btn.style.background = '';
+    btn.style.color = '';
+    label.textContent = 'Enable push notifications';
+    if(status){
+      if(Notification.permission === 'denied'){
+        status.style.display = 'block';
+        status.textContent = 'Notifications blocked in browser settings';
+        status.style.color = 'var(--er)';
+      }else{
+        status.style.display = 'none';
+      }
+    }
+  }
 }
 </script>
 </body>

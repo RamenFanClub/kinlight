@@ -479,7 +479,7 @@ Add this as a **5th job** after `dependency-audit`:
 🖥️ **Your local terminal:**
 
 ```bash
-./test.sh                           # Must pass 205
+./test.sh                           # Must pass 214
 cp index.html frontend/index.html   # Sync the frontend copies
 git add -A
 git commit -m "Migrate API from Railway to GCE (api.kinlight.app)"

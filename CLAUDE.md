@@ -156,7 +156,7 @@ The `index.html` includes a login wall:
 cd identity-service
 python3 -m pytest test_main.py -v
 ```
-Expected output: `205 passed` — if any fail, fix before pushing.
+Expected output: `214 passed` — if any fail, fix before pushing.
 
 ---
 
@@ -308,12 +308,18 @@ The backend is on Google Compute Engine free tier (`api.kinlight.app`) — an e2
 | POST | `/admin/force-overdue` | Yes | Set vault lastCheckin to 2020 to simulate overdue state (testing) |
 | POST | `/admin/force-reminder` | Yes | Set vault lastCheckin to just inside reminder threshold for F60 testing |
 | POST | `/admin/force-stale-pulse` | Yes | F93: Backdate the pulse scanner heartbeat to simulate a dead scanner, for testing /health's 503 path |
+| GET | `/push/key` | No | F101: Return VAPID public key for Web Push subscription |
+| POST | `/push/subscribe` | Yes | F101: Store a push notification subscription for the current user |
+| POST | `/push/unsubscribe` | Yes | F101: Remove a push notification subscription |
 
 ### Environment Variables (set in Railway dashboard, never committed)
 ```
 MONGO_URI=mongodb+srv://...
 JWT_SECRET=...
 RESEND_API_KEY=re_...
+VAULT_ENCRYPTION_KEY=...  (F04: 64-char hex AES-256-GCM key)
+VAPID_PRIVATE_KEY=...     (F101: URL-safe base64 VAPID private key)
+VAPID_PUBLIC_KEY=...      (F101: URL-safe base64 VAPID public key)
 ```
 
 ### Testing the pulse scanner end-to-end
@@ -395,7 +401,7 @@ notes, isTester, isAdmin, createdAt, lastLogin
 
 **File:** `identity-service/test_main.py`
 **Run:** `python3 -m pytest test_main.py -v`
-**Expected:** 205 passed
+**Expected:** 214 passed
 
 ### Coverage by feature
 
@@ -425,6 +431,12 @@ notes, isTester, isAdmin, createdAt, lastLogin
 | `TestVaultSyncLimits` | F96 vault sync input limits — max assets, max contacts, type check, valid payload | 4 |
 | `TestStrongerPasswordPolicy` | F97 password policy — common passwords, alpha-only, length, valid, case-insensitive, empty/None | 6 |
 | `TestPulseScannerHealth` | F93 pulse scanner heartbeat — healthy/unhealthy thresholds, 503 on stale or missing heartbeat, boundary case, heartbeat write on scan | 5 |
+| `TestEncryptContent` / `TestDecryptContent` / `TestReconstructWithEncryption` | F04 AES-256-GCM vault encryption — encrypt, decrypt, round-trip, idempotent, nonce uniqueness, plaintext passthrough | 25 |
+| `TestLoginRateLimit` / `TestPasswordResetRateLimit` / `TestNominateRateLimit` | F91 rate limiting — per-IP and per-user buckets, X-Forwarded-For leftmost IP, 429 on threshold | 8 |
+| `TestMaskEmail` / `TestJsonFormatter` | F95 structured logging — email masking, JSON formatter output | 9 |
+| `TestSecurityLogging` | F95 auth event logging — login failure, lockout, log doesn't leak password | 3 |
+| `TestUpdateAccount` | PATCH /auth/me — name, email, validation, normalization | 7 |
+| `TestPushNotifications` | F101 push notifications — GET /push/key, subscribe (store/update/validate/auth), unsubscribe (remove/empty/auth) | 9 |
 
 ### Frontend test coverage
 F44, F45, and other frontend features are not covered by the pytest suite — pytest only covers the Python backend. Frontend test coverage requires a browser automation tool (e.g. Playwright). This is tracked as a future infrastructure task. See F58 in the backlog.
@@ -511,8 +523,8 @@ When building a new feature, add a new `class TestFeatureName` block to `test_ma
 - [ ] Did anything structural change? Update `AGENTS.md` (session rules) or `CLAUDE.md` (full reference). Feature status changes → `docs/features.md`.
 - [ ] Replace `identity-service/main.py` in VS Code
 - [ ] Replace `identity-service/test_main.py` in VS Code
-- [ ] `cp index.html frontend/index.html`
-- [ ] Run `./test.sh` — confirm 205 passed before pushing
+- [ ] `cp index.html frontend/index.html && cp manifest.json sw.js favicon.svg icon-192.png icon-512.png frontend/`
+- [ ] Run `./test.sh` — confirm 214 passed before pushing
 - [ ] `git add -A`
 - [ ] `git commit -m "..."`
 - [ ] `git push`

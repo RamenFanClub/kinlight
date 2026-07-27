@@ -57,6 +57,7 @@ jobs:
   # ─── JOB 2: FRONTEND SYNC CHECK ───────────────────────────────────────────
   # Verifies that ./index.html and ./frontend/index.html are identical.
   # Catches the common mistake of updating one file but forgetting the other.
+  # Also checks PWA files (F100) are in sync between root and frontend/.
   frontend-sync:
     name: Frontend Sync Check
     runs-on: ubuntu-latest
@@ -75,6 +76,19 @@ jobs:
             diff index.html frontend/index.html
             exit 1
           fi
+
+      - name: Check PWA files are in sync
+        run: |
+          for f in manifest.json sw.js favicon.svg icon-192.png icon-512.png; do
+            if diff -q $f frontend/$f > /dev/null 2>&1; then
+              echo "✅ $f in sync"
+            else
+              echo "❌ $f out of sync!"
+              echo "Run: cp $f frontend/$f"
+              diff $f frontend/$f
+              exit 1
+            fi
+          done
 
   # ─── JOB 3: FRONTEND BROWSER TESTS (PLAYWRIGHT) ───────────────────────────
   # NEW (F58): Runs Playwright tests against index.html in a real browser.

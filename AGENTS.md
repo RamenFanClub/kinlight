@@ -9,8 +9,10 @@
 ## Before pushing
 
 ```bash
-./test.sh   # Runs pytest — must be 205 passed
+./test.sh   # Runs pytest — must be 214 passed
 cp index.html frontend/index.html   # Keep both copies in sync
+# Also sync PWA files (F100):
+cp manifest.json sw.js favicon.svg icon-192.png icon-512.png frontend/
 ```
 
 ---
@@ -21,7 +23,7 @@ cp index.html frontend/index.html   # Keep both copies in sync
 |-------|-------|-------|
 | Frontend | `./index.html` + `./frontend/index.html` | Single-file HTML/CSS/JS. GitHub Pages (`ramenfanclub.github.io/emergency-exit` → `kinlight.app`) |
 | Backend | `identity-service/main.py` | Python FastAPI. GCE e2-micro (`api.kinlight.app`) |
-| Database | MongoDB Atlas | Users + vaults collections |
+| Database | MongoDB Atlas | Users + vaults + push_subscriptions collections |
 | Email | Resend (`resend.com`) | From `hello@kinlight.app` |
 | CI/CD | `.github/workflows/ci.yml` | 4 jobs: pytest, sync check, Playwright, pip-audit |
 

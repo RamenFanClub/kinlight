@@ -1,7 +1,7 @@
 """
 Emergency Exit — Backend Test Suite
 Run: python3 -m pytest test_main.py -v
-Expected: 197 passed
+Expected: 212 passed
 """
 
 import logging
@@ -1978,3 +1978,97 @@ class TestUpdateAccount:
             r = self._patch({"email": "Mixed.Case@Test.COM"}, token)
         assert r.status_code == 200
         assert r.json()["user"]["email"] == "mixed.case@test.com"
+
+
+# ─── F101: PUSH NOTIFICATIONS ─────────────────────────────────────────────────
+
+class TestPushNotifications:
+    """Push notification endpoints: subscribe, unsubscribe, key retrieval."""
+
+    def _token(self, user_id="aaaaaaaaaaaaaaaaaaaaaaaa"):
+        return create_token(user_id)
+
+    def _get(self, path, token):
+        client = TestClient(main.app)
+        return client.get(path, headers={"Authorization": f"Bearer {token}"})
+
+    def _post(self, path, body, token):
+        client = TestClient(main.app)
+        return client.post(path, json=body, headers={"Authorization": f"Bearer {token}"})
+
+    def test_push_key_returns_vapid_public_key(self):
+        client = TestClient(main.app)
+        r = client.get("/push/key")
+        assert r.status_code == 200
+        assert "key" in r.json()
+        assert len(r.json()["key"]) > 10
+
+    def test_subscribe_stores_new_subscription(self):
+        token = self._token()
+        sub = {"endpoint": "https://push.example.com/abc", "keys": {"p256dh": "key1", "auth": "key2"}}
+        user = {"_id": ObjectId("aaaaaaaaaaaaaaaaaaaaaaaa"), "username": "tester", "name": "Test"}
+        with patch("main.users_col") as mock_users, patch("main.push_subs_col") as mock_subs:
+            mock_users.find_one.return_value = user
+            mock_subs.find_one.return_value = None
+            mock_subs.insert_one.return_value = None
+            r = self._post("/push/subscribe", {"subscription": sub}, token)
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+
+    def test_subscribe_updates_existing_subscription(self):
+        token = self._token()
+        sub = {"endpoint": "https://push.example.com/abc", "keys": {"p256dh": "key1", "auth": "key2"}}
+        user = {"_id": ObjectId("aaaaaaaaaaaaaaaaaaaaaaaa"), "username": "tester", "name": "Test"}
+        existing = {"_id": ObjectId("bbbbbbbbbbbbbbbbbbbbbbbb")}
+        with patch("main.users_col") as mock_users, patch("main.push_subs_col") as mock_subs:
+            mock_users.find_one.return_value = user
+            mock_subs.find_one.return_value = existing
+            mock_subs.update_one.return_value = None
+            r = self._post("/push/subscribe", {"subscription": sub}, token)
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+
+    def test_subscribe_rejects_invalid_subscription(self):
+        token = self._token()
+        user = {"_id": ObjectId("aaaaaaaaaaaaaaaaaaaaaaaa"), "username": "tester", "name": "Test"}
+        with patch("main.users_col") as mock_users, patch("main.push_subs_col") as mock_subs:
+            mock_users.find_one.return_value = user
+            r = self._post("/push/subscribe", {"subscription": {}}, token)
+        assert r.status_code == 400
+
+    def test_subscribe_rejects_missing_subscription(self):
+        token = self._token()
+        user = {"_id": ObjectId("aaaaaaaaaaaaaaaaaaaaaaaa"), "username": "tester", "name": "Test"}
+        with patch("main.users_col") as mock_users:
+            mock_users.find_one.return_value = user
+            r = self._post("/push/subscribe", {}, token)
+        assert r.status_code == 400
+
+    def test_subscribe_requires_auth(self):
+        client = TestClient(main.app)
+        r = client.post("/push/subscribe", json={"subscription": {"endpoint": "x"}})
+        assert r.status_code == 401
+
+    def test_unsubscribe_removes_subscription(self):
+        token = self._token()
+        user = {"_id": ObjectId("aaaaaaaaaaaaaaaaaaaaaaaa"), "username": "tester", "name": "Test"}
+        with patch("main.users_col") as mock_users, patch("main.push_subs_col") as mock_subs:
+            mock_users.find_one.return_value = user
+            mock_subs.delete_many.return_value = None
+            r = self._post("/push/unsubscribe", {"endpoint": "https://push.example.com/abc"}, token)
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+
+    def test_unsubscribe_handles_empty_endpoint(self):
+        token = self._token()
+        user = {"_id": ObjectId("aaaaaaaaaaaaaaaaaaaaaaaa"), "username": "tester", "name": "Test"}
+        with patch("main.users_col") as mock_users:
+            mock_users.find_one.return_value = user
+            r = self._post("/push/unsubscribe", {}, token)
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+
+    def test_unsubscribe_requires_auth(self):
+        client = TestClient(main.app)
+        r = client.post("/push/unsubscribe", json={"endpoint": "x"})
+        assert r.status_code == 401

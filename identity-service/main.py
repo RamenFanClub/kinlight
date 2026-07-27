@@ -21,6 +21,8 @@ import jwt
 import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 from bson import ObjectId
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,6 +36,7 @@ from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+from pywebpush import webpush as pywebpush_send, WebPushException
 
 
 # ─── APP & CONFIG ─────────────────────────────────────────────────────────────
@@ -168,6 +171,32 @@ users_col = db["users"] if db is not None else None
 vaults_col = db["vaults"] if db is not None else None
 resets_col = db["password_resets"] if db is not None else None
 system_col = db["system"] if db is not None else None  # F93: single doc tracking pulse scanner health
+push_subs_col = db["push_subscriptions"] if db is not None else None  # F101: push notification subscriptions
+
+# F101: VAPID keypair for Web Push. Generated once and stored in env vars.
+# If not set, generate a new pair at startup and log it — copy to Railway env vars.
+VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
+VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
+if not VAPID_PRIVATE_KEY or not VAPID_PUBLIC_KEY:
+    _key = ec.generate_private_key(ec.SECP256R1())
+    _priv_bytes = _key.private_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption()
+    )
+    _pub_bytes = _key.public_key().public_bytes(
+        encoding=serialization.Encoding.X962,
+        format=serialization.PublicFormat.UncompressedPoint
+    )
+    VAPID_PRIVATE_KEY = base64.urlsafe_b64encode(_priv_bytes).rstrip(b'=').decode()
+    VAPID_PUBLIC_KEY = base64.urlsafe_b64encode(_pub_bytes).rstrip(b'=').decode()
+    logger.warning(
+        "F101: VAPID keys not found in env — generated new pair. "
+        "Add VAPID_PRIVATE_KEY and VAPID_PUBLIC_KEY to your env vars. "
+        f"Public: {VAPID_PUBLIC_KEY}"
+    )
+
+VAPID_CLAIMS = {"sub": "mailto:hello@kinlight.app"}
 
 # Password reset configuration (F66)
 RESET_TOKEN_TTL_MINUTES = 60
@@ -942,6 +971,43 @@ def generate_pdf_for_contact(contact: dict, vault_doc: dict, holder_name: str = 
     return buf.getvalue()
 
 
+# ─── F101: PUSH NOTIFICATIONS ──────────────────────────────────────────────────
+
+def send_push_to_user(user_id, title: str, body: str, tag: str = "kinlight",
+                      require_interaction: bool = False) -> int:
+    """Send a push notification to all of a user's subscribed devices.
+    Returns the number of subscriptions successfully pushed to."""
+    if push_subs_col is None or not VAPID_PRIVATE_KEY:
+        return 0
+    subs = list(push_subs_col.find({"userId": user_id}))
+    sent = 0
+    for sub in subs:
+        try:
+            pywebpush_send(
+                subscription_info=sub["subscription"],
+                data=json.dumps({
+                    "title": title,
+                    "body": body,
+                    "tag": tag,
+                    "url": APP_URL,
+                    "requireInteraction": require_interaction,
+                }),
+                vapid_private_key=VAPID_PRIVATE_KEY,
+                vapid_claims=VAPID_CLAIMS,
+            )
+            sent += 1
+        except WebPushException as e:
+            # Remove expired/invalid subscriptions
+            if e.response and e.response.status_code in (404, 410):
+                push_subs_col.delete_one({"_id": sub["_id"]})
+                logger.info(f"F101: Removed expired push subscription for {user_id}")
+            else:
+                logger.warning(f"F101: Push failed for {user_id}: {e}")
+        except Exception as e:
+            logger.warning(f"F101: Push error for {user_id}: {e}")
+    return sent
+
+
 # ─── PULSE SCANNER ────────────────────────────────────────────────────────────
 
 def run_pulse_scan():
@@ -973,6 +1039,9 @@ def run_pulse_scan():
             # F64-2: Send holder warning email on day 1 and day 2 (ping_then_notify only)
             if should_send_warning(vault_doc, days_overdue):
                 if send_warning_email(user, days_overdue):
+                    send_push_to_user(user_id, "Your Kinlight check-in is overdue",
+                                      f"You have {CONTACT_NOTIFY_AFTER_DAYS - days_overdue} day(s) before contacts are notified.",
+                                      tag="kinlight-warning", require_interaction=True)
                     already_sent = vault_doc.get("warningSentDays", [])
                     vaults_col.update_one(
                         {"_id": vault_doc["_id"]},
@@ -992,6 +1061,9 @@ def run_pulse_scan():
                     if contacts and proto != "escalate":
                         # F64-2: Also notify the holder that contacts have been reached
                         send_contacts_notified_email(user, sent_count)
+                        send_push_to_user(user_id, "Contacts have been notified",
+                                          f"{sent_count} contact(s) received your vault package.",
+                                          tag="kinlight-contacts-notified", require_interaction=True)
                         vaults_col.update_one(
                             {"_id": vault_doc["_id"]},
                             {"$set": {"overdueNotificationSent": True, "updatedAt": now}},
@@ -1000,6 +1072,14 @@ def run_pulse_scan():
 
         if is_reminder_due(vault_doc):
             if send_reminder_email(user, vault_doc):
+                interval = _interval_days(vault_doc)
+                last_checkin = ensure_utc(vault_doc["lastCheckin"])
+                due_date = last_checkin + timedelta(days=interval)
+                days_remaining = max(0, (due_date - now_utc()).days)
+                days_label = f"{days_remaining} day{'s' if days_remaining != 1 else ''}"
+                send_push_to_user(user_id, "Check-in reminder",
+                                  f"Your Kinlight check-in is due in {days_label}.",
+                                  tag="kinlight-reminder")
                 vaults_col.update_one(
                     {"_id": vault_doc["_id"]},
                     {"$set": {"reminderSent": True, "updatedAt": now}},
@@ -1384,6 +1464,10 @@ def checkin(current_user: dict = Depends(get_current_user)):
         for contact in contacts:
             if send_allclear_email(contact, holder_name):
                 allclear_count += 1
+        if allclear_count > 0:
+            send_push_to_user(current_user["_id"], "All clear",
+                              f"All clear sent — {allclear_count} contact(s) notified you're okay.",
+                              tag="kinlight-allclear")
 
     return {
         "ok":             True,
@@ -1391,6 +1475,55 @@ def checkin(current_user: dict = Depends(get_current_user)):
         "allclear_sent":  allclear_count > 0,
         "allclear_count": allclear_count,
     }
+
+
+# ─── F101: PUSH NOTIFICATION API ───────────────────────────────────────────────
+
+@app.get("/push/key")
+def push_key():
+    """Return the VAPID public key so the frontend can subscribe for push."""
+    if not VAPID_PUBLIC_KEY:
+        raise HTTPException(status_code=503, detail="Push notifications not configured")
+    return {"key": VAPID_PUBLIC_KEY}
+
+
+@app.post("/push/subscribe")
+def push_subscribe(payload: dict, current_user: dict = Depends(get_current_user)):
+    """Store a push subscription for the current user."""
+    if push_subs_col is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+    subscription = payload.get("subscription")
+    if not subscription or not subscription.get("endpoint"):
+        raise HTTPException(status_code=400, detail="Invalid subscription")
+    user_id = current_user["_id"]
+    endpoint = subscription["endpoint"]
+    existing = push_subs_col.find_one({"userId": user_id, "subscription.endpoint": endpoint})
+    if existing:
+        push_subs_col.update_one(
+            {"_id": existing["_id"]},
+            {"$set": {"subscription": subscription, "updatedAt": now_utc()}},
+        )
+    else:
+        push_subs_col.insert_one({
+            "userId":       user_id,
+            "subscription": subscription,
+            "createdAt":    now_utc(),
+            "updatedAt":    now_utc(),
+        })
+    logger.info(f"F101: Push subscription saved for {mask_email(str(user_id))}")
+    return {"ok": True}
+
+
+@app.post("/push/unsubscribe")
+def push_unsubscribe(payload: dict, current_user: dict = Depends(get_current_user)):
+    """Remove a push subscription for the current user."""
+    if push_subs_col is None:
+        return {"ok": True}
+    endpoint = payload.get("endpoint", "")
+    if endpoint:
+        push_subs_col.delete_many({"userId": current_user["_id"], "subscription.endpoint": endpoint})
+        logger.info(f"F101: Push subscription removed for {mask_email(str(current_user['_id']))}")
+    return {"ok": True}
 
 
 # ─── ADMIN / TESTING ROUTES ───────────────────────────────────────────────────
