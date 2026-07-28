@@ -152,7 +152,7 @@ class TestReconstructVaultBlob:
             "gracePeriodDays": 7,
             "notifyProto": "ping_then_notify",
             "lastCheckin": datetime(2024, 1, 1, tzinfo=timezone.utc),
-            "content": {"assets": [], "wishes": [], "will": None, "suppDocs": [], "kin": [], "v": "face", "notifySeq": "in_order", "saveCount": 0},
+            "content": {"assets": [], "wishes": [], "will": None, "suppDocs": [], "kin": [], "v": "face", "notifySeq": "in_order", "saveCount": 0, "pushSubscribed": False},
             "log": [],
         }
         base.update(kwargs)
@@ -196,6 +196,16 @@ class TestReconstructVaultBlob:
         doc["content"]["assets"] = [{"name": "House"}]
         result = reconstruct_vault_blob(doc)
         assert result["assets"][0]["name"] == "House"
+
+    def test_push_subscribed_true(self):
+        doc = self._doc()
+        doc["content"]["pushSubscribed"] = True
+        result = reconstruct_vault_blob(doc)
+        assert result["pushSubscribed"] is True
+
+    def test_push_subscribed_defaults_false(self):
+        result = reconstruct_vault_blob(self._doc())
+        assert result["pushSubscribed"] is False
 
 
 # ─── NOTIFICATION PROTOCOL ────────────────────────────────────────────────────

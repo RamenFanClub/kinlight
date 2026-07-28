@@ -361,6 +361,7 @@ def reconstruct_vault_blob(doc: dict) -> dict:
         "fu":          doc.get("checkInUnit", "months"),
         "gp":          doc.get("gracePeriodDays", 7),
         "notifyProto": doc.get("notifyProto", "ping_then_notify"),
+        "pushSubscribed": content.get("pushSubscribed", False),
         "log":         doc.get("log", []),
     }
 
@@ -1306,6 +1307,7 @@ def vault_sync(body: dict, current_user: dict = Depends(get_current_user)):
         "v":         vault_blob.get("v", "face"),
         "notifySeq": vault_blob.get("notifySeq", "in_order"),
         "saveCount": vault_blob.get("saveCount", 0),
+        "pushSubscribed": vault_blob.get("pushSubscribed", False),
     }
 
     # F04: encrypt vault content before storage
