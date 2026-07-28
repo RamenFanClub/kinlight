@@ -9,7 +9,7 @@
 ## ✅ CHECKPOINT COMPLETE — F100/F101 (PWA + Push Notifications)
 
 > **Completed:** 28 July 2026
-> **Status:** Code complete (214 tests pass). VAPID keys configured on GCE. GitHub secrets set.
+> **Status:** Code complete (228 tests pass). VAPID keys configured on GCE. GitHub secrets set.
 
 ### What was built
 - **F100 (PWA):** `manifest.json`, `sw.js`, app icons, offline caching, offline check-in awareness
@@ -31,7 +31,7 @@
 ## Before pushing
 
 ```bash
-./test.sh   # Runs pytest — must be 214 passed
+./test.sh   # Runs pytest — must be 228 passed
 cp index.html frontend/index.html   # Keep both copies in sync
 # Also sync PWA files (F100):
 cp manifest.json sw.js favicon.svg icon-192.png icon-512.png frontend/

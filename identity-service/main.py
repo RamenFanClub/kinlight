@@ -24,7 +24,7 @@ from bson import ObjectId
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pymongo import MongoClient, ASCENDING
@@ -1558,11 +1558,21 @@ def trigger_pulse(request: Request, current_user: dict = Depends(get_current_use
 
 @app.post("/admin/force-overdue")
 @limiter.limit("5/minute", key_func=get_user_or_ip)
-def force_overdue(request: Request, current_user: dict = Depends(get_current_user)):
+def force_overdue(request: Request, body: dict = Body(...), current_user: dict = Depends(get_current_user)):
     """Set vault lastCheckin to 2020 to simulate an overdue state. For testing."""
     require_admin(current_user)
+
+    target_username = (body.get("target", "") or "").strip().lower()
+    if target_username:
+        target_user = users_col.find_one({"username": target_username})
+        if not target_user:
+            raise HTTPException(status_code=404, detail="Target user not found")
+        user_id = target_user["_id"]
+    else:
+        user_id = current_user["_id"]
+
     vaults_col.update_one(
-        {"userId": current_user["_id"]},
+        {"userId": user_id},
         {"$set": {
             "lastCheckin":               datetime(2020, 1, 1, tzinfo=timezone.utc),
             "overdueNotificationSent":   False,
@@ -1577,20 +1587,30 @@ def force_overdue(request: Request, current_user: dict = Depends(get_current_use
 
 @app.post("/admin/force-reminder")
 @limiter.limit("5/minute", key_func=get_user_or_ip)
-def force_reminder(request: Request, current_user: dict = Depends(get_current_user)):
+def force_reminder(request: Request, body: dict = Body(...), current_user: dict = Depends(get_current_user)):
     """
     Set vault lastCheckin so the reminder threshold triggers next scan.
     Places lastCheckin so exactly (threshold - 1) days remain until due.
     For testing only.
     """
     require_admin(current_user)
-    vault_doc = vaults_col.find_one({"userId": current_user["_id"]})
+
+    target_username = (body.get("target", "") or "").strip().lower()
+    if target_username:
+        target_user = users_col.find_one({"username": target_username})
+        if not target_user:
+            raise HTTPException(status_code=404, detail="Target user not found")
+        user_id = target_user["_id"]
+    else:
+        user_id = current_user["_id"]
+
+    vault_doc = vaults_col.find_one({"userId": user_id})
     interval = _interval_days(vault_doc) if vault_doc else 60
     threshold = max(7, round(interval * 0.25))
     fake_checkin = now_utc() - timedelta(days=interval - threshold + 1)
 
     vaults_col.update_one(
-        {"userId": current_user["_id"]},
+        {"userId": user_id},
         {"$set": {
             "lastCheckin":               fake_checkin,
             "reminderSent":              False,
@@ -1605,17 +1625,27 @@ def force_reminder(request: Request, current_user: dict = Depends(get_current_us
 
 @app.post("/admin/force-warning")
 @limiter.limit("5/minute", key_func=get_user_or_ip)
-def force_warning(request: Request, current_user: dict = Depends(get_current_user)):
+def force_warning(request: Request, body: dict = Body(...), current_user: dict = Depends(get_current_user)):
     """F64-2: Set vault to day 1 of overdue (just inside warning window). For testing."""
     require_admin(current_user)
-    vault_doc = vaults_col.find_one({"userId": current_user["_id"]})
+
+    target_username = (body.get("target", "") or "").strip().lower()
+    if target_username:
+        target_user = users_col.find_one({"username": target_username})
+        if not target_user:
+            raise HTTPException(status_code=404, detail="Target user not found")
+        user_id = target_user["_id"]
+    else:
+        user_id = current_user["_id"]
+
+    vault_doc = vaults_col.find_one({"userId": user_id})
     interval = _interval_days(vault_doc) if vault_doc else 60
     grace = vault_doc.get("gracePeriodDays", 7) if vault_doc else 7
     # Place lastCheckin so vault is exactly 1 day into overdue
     fake_checkin = now_utc() - timedelta(days=interval + grace + 1)
 
     vaults_col.update_one(
-        {"userId": current_user["_id"]},
+        {"userId": user_id},
         {"$set": {
             "lastCheckin":               fake_checkin,
             "overdueNotificationSent":   False,

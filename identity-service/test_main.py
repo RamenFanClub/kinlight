@@ -1,7 +1,7 @@
 """
 Emergency Exit — Backend Test Suite
 Run: python3 -m pytest test_main.py -v
-Expected: 212 passed
+Expected: 228 passed
 """
 
 import logging
@@ -2082,3 +2082,219 @@ class TestPushNotifications:
         client = TestClient(main.app)
         r = client.post("/push/unsubscribe", json={"endpoint": "x"})
         assert r.status_code == 401
+
+
+class TestAdminForceEndpoints:
+    """Admin force endpoints: target parameter lets admins test notifications
+    for other users without switching accounts or manipulating the DB directly.
+    """
+
+    ADMIN_ID  = ObjectId("aaaaaaaaaaaaaaaaaaaaaaaa")
+    TARGET_ID = ObjectId("bbbbbbbbbbbbbbbbbbbbbbbb")
+
+    @staticmethod
+    def _admin_user():
+        return {
+            "_id": TestAdminForceEndpoints.ADMIN_ID,
+            "username": "anggi",
+            "name": "Anggi",
+            "isAdmin": True,
+        }
+
+    @staticmethod
+    def _target_user():
+        return {
+            "_id": TestAdminForceEndpoints.TARGET_ID,
+            "username": "tester_01",
+            "name": "Tester One",
+        }
+
+    @staticmethod
+    def _vault_doc(user_id):
+        return {
+            "_id": ObjectId("cccccccccccccccccccccccc"),
+            "userId": user_id,
+            "lastCheckin": now_utc(),
+            "checkInFrequency": 4,
+            "checkInUnit": "weeks",
+            "gracePeriodDays": 7,
+            "notifyProto": "ping_then_notify",
+            "overdueNotificationSent": False,
+            "reminderSent": False,
+            "warningSentDays": [],
+        }
+
+    def _token(self, user_id=ADMIN_ID):
+        return create_token(str(user_id))
+
+    def _post(self, path, body, token):
+        client = TestClient(main.app)
+        return client.post(path, json=body, headers={"Authorization": f"Bearer {token}"})
+
+    # ── helpers ───────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _make_find_user(admin, target=None):
+        """Return a mock side_effect for users_col.find_one that handles both
+        the _id lookup (get_current_user) and the username lookup (target)."""
+        def fn(query):
+            if query.get("_id") == admin["_id"]:
+                return admin
+            if target and query.get("username") == target["username"]:
+                return target
+            return None
+        return fn
+
+    # ── force-overdue ─────────────────────────────────────────────────────
+
+    def test_force_overdue_with_target(self):
+        """Target parameter: mutates the target user's vault, not the admin's."""
+        token = self._token()
+        admin = self._admin_user()
+        target = self._target_user()
+        with patch("main.users_col") as mock_users, \
+             patch("main.vaults_col") as mock_vaults:
+            mock_users.find_one.side_effect = self._make_find_user(admin, target)
+            mock_vaults.update_one.return_value = None
+            r = self._post("/admin/force-overdue", {"target": "tester_01"}, token)
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+        call_args = mock_vaults.update_one.call_args
+        assert call_args[0][0]["userId"] == target["_id"]
+
+    def test_force_overdue_without_target(self):
+        """No target: uses the admin's own vault (backward compatible)."""
+        token = self._token()
+        admin = self._admin_user()
+        with patch("main.users_col") as mock_users, \
+             patch("main.vaults_col") as mock_vaults:
+            mock_users.find_one.side_effect = self._make_find_user(admin)
+            mock_vaults.update_one.return_value = None
+            r = self._post("/admin/force-overdue", {}, token)
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+        call_args = mock_vaults.update_one.call_args
+        assert call_args[0][0]["userId"] == admin["_id"]
+
+    def test_force_overdue_target_not_found(self):
+        """Non-existent target username returns 404."""
+        token = self._token()
+        admin = self._admin_user()
+        with patch("main.users_col") as mock_users:
+            mock_users.find_one.side_effect = self._make_find_user(admin)
+            r = self._post("/admin/force-overdue", {"target": "nonexistent"}, token)
+        assert r.status_code == 404
+
+    def test_force_overdue_requires_admin(self):
+        """Non-admin users cannot call force-overdue (with or without target)."""
+        user_id = ObjectId("dddddddddddddddddddddddd")
+        token = create_token(str(user_id))
+        user = {"_id": user_id, "username": "tester_01", "name": "Test"}
+        with patch("main.users_col") as mock_users:
+            mock_users.find_one.return_value = user
+            r = self._post("/admin/force-overdue", {}, token)
+        assert r.status_code == 403
+
+    # ── force-reminder ────────────────────────────────────────────────────
+
+    def test_force_reminder_with_target(self):
+        """Target parameter: mutates target user's vault for reminder state."""
+        token = self._token()
+        admin = self._admin_user()
+        target = self._target_user()
+        vault = self._vault_doc(target["_id"])
+        with patch("main.users_col") as mock_users, \
+             patch("main.vaults_col") as mock_vaults:
+            mock_users.find_one.side_effect = self._make_find_user(admin, target)
+            mock_vaults.find_one.return_value = vault
+            mock_vaults.update_one.return_value = None
+            r = self._post("/admin/force-reminder", {"target": "tester_01"}, token)
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+        call_args = mock_vaults.update_one.call_args
+        assert call_args[0][0]["userId"] == target["_id"]
+
+    def test_force_reminder_without_target(self):
+        """No target: uses admin's own vault."""
+        token = self._token()
+        admin = self._admin_user()
+        vault = self._vault_doc(admin["_id"])
+        with patch("main.users_col") as mock_users, \
+             patch("main.vaults_col") as mock_vaults:
+            mock_users.find_one.side_effect = self._make_find_user(admin)
+            mock_vaults.find_one.return_value = vault
+            mock_vaults.update_one.return_value = None
+            r = self._post("/admin/force-reminder", {}, token)
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+
+    def test_force_reminder_target_not_found(self):
+        """Non-existent target returns 404."""
+        token = self._token()
+        admin = self._admin_user()
+        with patch("main.users_col") as mock_users:
+            mock_users.find_one.side_effect = self._make_find_user(admin)
+            r = self._post("/admin/force-reminder", {"target": "ghost_user"}, token)
+        assert r.status_code == 404
+
+    def test_force_reminder_requires_admin(self):
+        """Non-admin blocked from force-reminder."""
+        user_id = ObjectId("eeeeeeeeeeeeeeeeeeeeeeee")
+        token = create_token(str(user_id))
+        user = {"_id": user_id, "username": "tester_02", "name": "Test"}
+        with patch("main.users_col") as mock_users:
+            mock_users.find_one.return_value = user
+            r = self._post("/admin/force-reminder", {}, token)
+        assert r.status_code == 403
+
+    # ── force-warning ─────────────────────────────────────────────────────
+
+    def test_force_warning_with_target(self):
+        """Target parameter: mutates target user's vault for warning state."""
+        token = self._token()
+        admin = self._admin_user()
+        target = self._target_user()
+        vault = self._vault_doc(target["_id"])
+        with patch("main.users_col") as mock_users, \
+             patch("main.vaults_col") as mock_vaults:
+            mock_users.find_one.side_effect = self._make_find_user(admin, target)
+            mock_vaults.find_one.return_value = vault
+            mock_vaults.update_one.return_value = None
+            r = self._post("/admin/force-warning", {"target": "tester_01"}, token)
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+        call_args = mock_vaults.update_one.call_args
+        assert call_args[0][0]["userId"] == target["_id"]
+
+    def test_force_warning_without_target(self):
+        """No target: uses admin's own vault."""
+        token = self._token()
+        admin = self._admin_user()
+        vault = self._vault_doc(admin["_id"])
+        with patch("main.users_col") as mock_users, \
+             patch("main.vaults_col") as mock_vaults:
+            mock_users.find_one.side_effect = self._make_find_user(admin)
+            mock_vaults.find_one.return_value = vault
+            mock_vaults.update_one.return_value = None
+            r = self._post("/admin/force-warning", {}, token)
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+
+    def test_force_warning_target_not_found(self):
+        """Non-existent target returns 404."""
+        token = self._token()
+        admin = self._admin_user()
+        with patch("main.users_col") as mock_users:
+            mock_users.find_one.side_effect = self._make_find_user(admin)
+            r = self._post("/admin/force-warning", {"target": "nope"}, token)
+        assert r.status_code == 404
+
+    def test_force_warning_requires_admin(self):
+        """Non-admin blocked from force-warning."""
+        user_id = ObjectId("ffffffffffffffffffffffff")
+        token = create_token(str(user_id))
+        user = {"_id": user_id, "username": "tester_03", "name": "Test"}
+        with patch("main.users_col") as mock_users:
+            mock_users.find_one.return_value = user
+            r = self._post("/admin/force-warning", {}, token)
+        assert r.status_code == 403

@@ -18,7 +18,7 @@
 ## ✅ CHECKPOINT COMPLETE — F100/F101 (PWA + Push Notifications)
 
 > **Completed:** 28 July 2026
-> **Status:** Code complete (214 tests pass). VAPID keys configured on GCE.
+> **Status:** Code complete (228 tests pass). VAPID keys configured on GCE.
 
 ---
 
@@ -166,7 +166,7 @@ The `index.html` includes a login wall:
 cd identity-service
 python3 -m pytest test_main.py -v
 ```
-Expected output: `214 passed` — if any fail, fix before pushing.
+Expected output: `228 passed` — if any fail, fix before pushing.
 
 ---
 
@@ -411,7 +411,7 @@ notes, isTester, isAdmin, createdAt, lastLogin
 
 **File:** `identity-service/test_main.py`
 **Run:** `python3 -m pytest test_main.py -v`
-**Expected:** 214 passed
+**Expected:** 228 passed
 
 ### Coverage by feature
 
@@ -447,6 +447,7 @@ notes, isTester, isAdmin, createdAt, lastLogin
 | `TestSecurityLogging` | F95 auth event logging — login failure, lockout, log doesn't leak password | 3 |
 | `TestUpdateAccount` | PATCH /auth/me — name, email, validation, normalization | 7 |
 | `TestPushNotifications` | F101 push notifications — GET /push/key, subscribe (store/update/validate/auth), unsubscribe (remove/empty/auth) | 9 |
+| `TestAdminForceEndpoints` | Admin force-* endpoints — target param for testing notifications as other users, backward compat, 404 on missing target, non-admin 403 | 12 |
 
 ### Frontend test coverage
 F44, F45, and other frontend features are not covered by the pytest suite — pytest only covers the Python backend. Frontend test coverage requires a browser automation tool (e.g. Playwright). This is tracked as a future infrastructure task. See F58 in the backlog.
@@ -534,7 +535,7 @@ When building a new feature, add a new `class TestFeatureName` block to `test_ma
 - [ ] Replace `identity-service/main.py` in VS Code
 - [ ] Replace `identity-service/test_main.py` in VS Code
 - [ ] `cp index.html frontend/index.html && cp manifest.json sw.js favicon.svg icon-192.png icon-512.png frontend/`
-- [ ] Run `./test.sh` — confirm 214 passed before pushing
+- [ ] Run `./test.sh` — confirm 228 passed before pushing
 - [ ] `git add -A`
 - [ ] `git commit -m "..."`
 - [ ] `git push`
