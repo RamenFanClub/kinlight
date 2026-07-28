@@ -6,45 +6,15 @@
 
 ---
 
-## 🔴 ACTIVE CHECKPOINT — F100/F101 (PWA + Push Notifications)
+## ✅ CHECKPOINT COMPLETE — F100/F101 (PWA + Push Notifications)
 
-> **Last updated:** 27 July 2026
-> **Status:** Code complete (214 tests pass). Pushed to GitHub. **VAPID keys NOT yet configured on GCE.**
+> **Completed:** 28 July 2026
+> **Status:** Code complete (214 tests pass). VAPID keys configured on GCE. GitHub secrets set.
 
 ### What was built
 - **F100 (PWA):** `manifest.json`, `sw.js`, app icons, offline caching, offline check-in awareness
 - **F101 (Push):** Backend push endpoints, `pywebpush` dependency, `send_push_to_user()` called alongside all email triggers, push toggle in Settings UI
-
-### What still needs to be done (in order)
-
-**Step 1 — SSH into the GCE VM and get the VAPID keys**
-The first deploy ran without VAPID env vars, so the server generated a new pair at startup and logged them:
-1. SSH into the GCE VM (browser SSH: GCP Console → Compute Engine → VM → SSH button)
-2. Run: `docker logs kinlight-app 2>&1 | grep "F101"`
-3. You'll see: `WARNING: F101: VAPID keys not found in env — generated new pair. Public: BGxl88k2a...`
-4. Copy both the private key and public key (long URL-safe base64 strings)
-
-**Step 2 — Add the keys as GitHub Secrets**
-1. Go to `https://github.com/RamenFanClub/kinlight` → Settings → Secrets and variables → Actions
-2. Add **New repository secret:** `VAPID_PRIVATE_KEY` ← the private key string
-3. Add **New repository secret:** `VAPID_PUBLIC_KEY` ← the public key string
-
-**Step 3 — Update CI to pass the keys to Docker**
-In `.github/workflows/ci.yml`, add these two lines inside the `docker run` command (after the `VAULT_ENCRYPTION_KEY` line):
-```
--e VAPID_PRIVATE_KEY='${{ secrets.VAPID_PRIVATE_KEY }}' \
--e VAPID_PUBLIC_KEY='${{ secrets.VAPID_PUBLIC_KEY }}' \
-```
-
-**Step 4 — Push to redeploy**
-```bash
-git add .github/workflows/ci.yml && git commit -m "Add VAPID env vars to GCE deploy" && git push
-```
-Server now starts with stable VAPID keys. The WARNING disappears.
-
-**Step 5 — Test on phone**
-1. Open `https://kinlight.app` → install to home screen (Chrome: Menu → Add to Home Screen / Safari: Share → Add to Home Screen)
-2. Log in, go to Settings → toggle "Enable push notifications" → grant permission
+- **CI:** VAPID env vars passed to Docker container via GitHub secrets
 
 ### Key reminders
 - VAPID keys must NOT change between deploys (old push subscriptions break)

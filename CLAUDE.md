@@ -15,10 +15,10 @@
 
 ---
 
-## 🔴 ACTIVE CHECKPOINT — F100/F101 (PWA + Push Notifications)
+## ✅ CHECKPOINT COMPLETE — F100/F101 (PWA + Push Notifications)
 
-> **Status:** Code complete (214 tests pass). **VAPID keys NOT yet configured.**
-> Full details and step-by-step instructions in `AGENTS.md`.
+> **Completed:** 28 July 2026
+> **Status:** Code complete (214 tests pass). VAPID keys configured on GCE.
 
 ---
 
