@@ -27,6 +27,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pymongo import MongoClient, ASCENDING
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -120,6 +121,7 @@ def get_user_or_ip(request: Request) -> str:
 
 limiter = Limiter(key_func=get_client_ip)
 app = FastAPI()
+security = HTTPBearer(auto_error=False)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -485,10 +487,10 @@ def clean_user(user: dict) -> dict:
     }
 
 
-def get_current_user(authorization: str = Header(None)) -> dict:
-    if not authorization or not authorization.startswith("Bearer "):
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    if not credentials:
         raise HTTPException(status_code=401, detail="Missing token")
-    token = authorization.split(" ", 1)[1]
+    token = credentials.credentials
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"], options={"require": ["exp", "sub"]})
         user = users_col.find_one({"_id": ObjectId(payload["sub"])})
