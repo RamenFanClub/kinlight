@@ -24,7 +24,7 @@ from bson import ObjectId
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Body, Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -38,6 +38,8 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 from pywebpush import webpush as pywebpush_send, WebPushException
+
+from storage import get_storage_backend
 
 
 # ─── APP & CONFIG ─────────────────────────────────────────────────────────────
@@ -243,6 +245,23 @@ MAX_VAULT_ASSETS = 500
 MAX_VAULT_CONTACTS = 50
 MAX_VAULT_BODY_BYTES = 1_000_000  # 1 MB
 
+# File upload limits
+MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
+ALLOWED_CONTENT_TYPES = {
+    "application/pdf",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "text/plain",
+    "application/zip",
+}
+ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".doc", ".docx", ".txt", ".zip"}
+
+# Storage backend — pluggable (GridFS by default; set STORAGE_BACKEND=s3 to swap)
+_storage_backend = get_storage_backend(db) if db is not None else None
+
 
 
 # ─── TIMESTAMP HELPERS ────────────────────────────────────────────────────────
@@ -316,6 +335,32 @@ def decrypt_content(stored) -> dict:
     ciphertext = raw[12:]
     plaintext = cipher.decrypt(nonce, ciphertext, None)
     return json.loads(plaintext.decode("utf-8"))
+
+
+def encrypt_bytes(plaintext: bytes) -> bytes:
+    """
+    Encrypt raw bytes with AES-256-GCM.
+    Format: nonce_12_bytes + ciphertext_with_tag
+    Returns raw bytes — no base64 (GridFS handles binary natively).
+    """
+    cipher = _get_aesgcm()
+    if cipher is None:
+        raise RuntimeError("VAULT_ENCRYPTION_KEY not set — cannot encrypt files.")
+    nonce = os.urandom(12)
+    ciphertext = cipher.encrypt(nonce, plaintext, None)
+    return nonce + ciphertext
+
+
+def decrypt_bytes(encrypted: bytes) -> bytes:
+    """
+    Decrypt bytes produced by encrypt_bytes. Returns plaintext.
+    """
+    cipher = _get_aesgcm()
+    if cipher is None:
+        raise RuntimeError("VAULT_ENCRYPTION_KEY not set — cannot decrypt files.")
+    nonce = encrypted[:12]
+    ciphertext = encrypted[12:]
+    return cipher.decrypt(nonce, ciphertext, None)
 
 
 # ─── VAULT SCHEMA HELPERS ─────────────────────────────────────────────────────
@@ -932,13 +977,19 @@ def generate_pdf_for_contact(contact: dict, vault_doc: dict, holder_name: str = 
         story += field("Primary Location", will.get("loc1", ""))
         story += field("Secondary Location", will.get("loc2", ""))
         story += field("Notes", will.get("notes", ""))
+        if will.get("file_id"):
+            story += field("Attached file", will.get("filename", ""))
     else:
         story.append(Paragraph("[No Will details recorded.]", styles["body"]))
 
     if supp_docs:
         story += section("Supporting Documents")
         for d in supp_docs:
-            story += field(d.get("name", ""), f"Location: {esc(d['loc'])}" if d.get("loc") else "")
+            loc_line = f"Location: {esc(d['loc'])}" if d.get("loc") else ""
+            if d.get("file_id"):
+                loc_line = (loc_line + ("  ·  " if loc_line else "") +
+                           f"Attached: {esc(d.get('filename', ''))}")
+            story += field(d.get("name", ""), loc_line)
 
     if assets:
         story += section("Asset Register")
@@ -1658,3 +1709,139 @@ def force_warning(request: Request, body: dict = Body(...), current_user: dict =
         upsert=True,
     )
     return {"ok": True, "message": "Vault set to day 1 of overdue (warning window)"}
+
+
+# ─── FILE UPLOAD / STORAGE ────────────────────────────────────────────────────
+
+def _file_owns(file_id: str, current_user: dict) -> bool:
+    """Check whether the current user owns the given file (by GridFS metadata)."""
+    if _storage_backend is None:
+        return False
+    owner = _storage_backend.get_owner(file_id)
+    return owner == str(current_user["_id"])
+
+
+def _validate_filename(filename: str) -> bool:
+    """Reject filenames that look like traversal or have dangerous extensions."""
+    if not filename:
+        return False
+    if ".." in filename or "/" in filename or "\\" in filename:
+        return False
+    lower = filename.lower()
+    for ext in ALLOWED_EXTENSIONS:
+        if lower.endswith(ext):
+            return True
+    return False
+
+
+@app.post("/files/upload")
+@limiter.limit("10/minute", key_func=get_user_or_ip)
+async def upload_file(
+    request: Request,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Upload a file to the vault. Returns {file_id, filename, content_type}.
+
+    Allowed types: PDF, JPEG, PNG, WebP, DOC/DOCX, TXT, ZIP.
+    Max size: 10 MB. File is encrypted at rest with AES-256-GCM.
+    """
+    if _storage_backend is None:
+        raise HTTPException(status_code=503, detail="File storage not available")
+
+    filename = (file.filename or "").strip()
+    if not _validate_filename(filename):
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file type. Allowed: PDF, JPEG, PNG, WebP, DOC, DOCX, TXT, ZIP.",
+        )
+
+    content_type = file.content_type or "application/octet-stream"
+    if content_type not in ALLOWED_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file type. Allowed: PDF, JPEG, PNG, WebP, DOC, DOCX, TXT, ZIP.",
+        )
+
+    file_data = await file.read()
+    if len(file_data) == 0:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(file_data) > MAX_FILE_SIZE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Maximum size is {MAX_FILE_SIZE_BYTES // (1024*1024)} MB.",
+        )
+
+    encrypted_data = encrypt_bytes(file_data)
+    file_id = _storage_backend.upload(
+        encrypted_data,
+        filename=filename,
+        content_type=content_type,
+        metadata={
+            "userId": str(current_user["_id"]),
+            "filename": filename,
+        },
+    )
+
+    logger.info(f"File uploaded — user={str(current_user['_id'])} file_id={file_id} name={mask_email(filename)}")
+    return {"ok": True, "file_id": file_id, "filename": filename, "content_type": content_type}
+
+
+@app.get("/files/{file_id}")
+@limiter.limit("30/minute", key_func=get_user_or_ip)
+def download_file(
+    request: Request,
+    file_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Download a previously uploaded file. Returns the file with its original
+    content type. Only the file owner can download it.
+    """
+    if _storage_backend is None:
+        raise HTTPException(status_code=503, detail="File storage not available")
+
+    if not _file_owns(file_id, current_user):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    result = _storage_backend.download(file_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    encrypted_data, filename, content_type = result
+    try:
+        plaintext = decrypt_bytes(encrypted_data)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to decrypt file")
+
+    from fastapi.responses import Response
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Content-Type": content_type,
+    }
+    return Response(content=plaintext, headers=headers, media_type=content_type)
+
+
+@app.delete("/files/{file_id}")
+@limiter.limit("10/minute", key_func=get_user_or_ip)
+def delete_file(
+    request: Request,
+    file_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Delete a previously uploaded file. Only the file owner can delete it.
+    """
+    if _storage_backend is None:
+        raise HTTPException(status_code=503, detail="File storage not available")
+
+    if not _file_owns(file_id, current_user):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    deleted = _storage_backend.delete(file_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    logger.info(f"File deleted — user={str(current_user['_id'])} file_id={file_id}")
+    return {"ok": True}

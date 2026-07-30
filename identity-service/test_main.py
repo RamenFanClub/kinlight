@@ -49,6 +49,8 @@ from main import (
     now_utc,
     encrypt_content,
     decrypt_content,
+    encrypt_bytes,
+    decrypt_bytes,
 )
 
 
@@ -2298,3 +2300,240 @@ class TestAdminForceEndpoints:
             mock_users.find_one.return_value = user
             r = self._post("/admin/force-warning", {}, token)
         assert r.status_code == 403
+
+
+# ─── FILE UPLOAD & STORAGE ───────────────────────────────────────────────────
+
+class TestEncryptBytes:
+    """AES-256-GCM byte-level encryption for file uploads."""
+
+    def test_round_trip(self):
+        from main import VAULT_ENCRYPTION_KEY
+        assert VAULT_ENCRYPTION_KEY, "VAULT_ENCRYPTION_KEY must be set for these tests"
+        data = b"Hello, Kinlight file storage!"
+        encrypted = encrypt_bytes(data)
+        assert isinstance(encrypted, bytes)
+        assert len(encrypted) == len(data) + 12 + 16  # nonce + ciphertext + tag
+        decrypted = decrypt_bytes(encrypted)
+        assert decrypted == data
+
+    def test_non_empty(self):
+        data = b"a" * 1024
+        encrypted = encrypt_bytes(data)
+        assert len(encrypted) > 0
+        assert encrypted != data
+
+    def test_empty_data(self):
+        data = b""
+        encrypted = encrypt_bytes(data)
+        decrypted = decrypt_bytes(encrypted)
+        assert decrypted == b""
+
+    def test_raise_without_key(self, monkeypatch):
+        monkeypatch.setattr("main.VAULT_ENCRYPTION_KEY", "")
+        with pytest.raises(RuntimeError, match="VAULT_ENCRYPTION_KEY"):
+            encrypt_bytes(b"test")
+        with pytest.raises(RuntimeError, match="VAULT_ENCRYPTION_KEY"):
+            decrypt_bytes(b"test")
+
+
+class TestValidateFilename:
+    """Filename validation for file uploads."""
+
+    def test_valid_extensions(self):
+        from main import _validate_filename
+        for name in ["will.pdf", "scan.jpg", "image.jpeg", "photo.png",
+                     "doc.webp", "letter.doc", "letter.docx", "notes.txt",
+                     "archive.zip"]:
+            assert _validate_filename(name), f"{name} should be valid"
+
+    def test_invalid_extensions(self):
+        from main import _validate_filename
+        for name in ["virus.exe", "malware.sh", "script.py", ""]:
+            assert not _validate_filename(name), f"{name} should be invalid"
+
+    def test_traversal_rejected(self):
+        from main import _validate_filename
+        assert not _validate_filename("../etc/passwd")
+        assert not _validate_filename("foo/bar.pdf")
+        assert not _validate_filename("foo\\bar.pdf")
+
+
+class TestFileUploadEndpoints:
+    """HTTP integration tests for /files/upload, /files/{id}, DELETE /files/{id}."""
+
+    USER_ID = ObjectId("ffffffffffffffffffffffff")
+    FILE_ID = "111111111111111111111111"
+
+    @staticmethod
+    def _token():
+        return create_token(str(TestFileUploadEndpoints.USER_ID))
+
+    @staticmethod
+    def _user():
+        return {
+            "_id": TestFileUploadEndpoints.USER_ID,
+            "username": "tester_01",
+            "name": "Test",
+        }
+
+    def _post_file(self, path, file_content=b"test content", filename="test.pdf",
+                   content_type="application/pdf", token=None):
+        from io import BytesIO
+        client = TestClient(main.app)
+        headers = {"Authorization": f"Bearer {token or self._token()}"}
+        return client.post(
+            path,
+            files={"file": (filename, BytesIO(file_content), content_type)},
+            headers=headers,
+        )
+
+    def _mock_storage(self, owner=None):
+        mock = MagicMock()
+        mock.upload.return_value = self.FILE_ID
+        mock.download.return_value = (b"encrypted_blob", "test.pdf", "application/pdf")
+        mock.delete.return_value = True
+        mock.get_owner.return_value = str(TestFileUploadEndpoints.USER_ID) if owner is None else owner
+        return mock
+
+    # ── upload ─────────────────────────────────────────────────────────────
+
+    def test_upload_requires_auth(self):
+        client = TestClient(main.app)
+        with patch("main._storage_backend", self._mock_storage()):
+            r = client.post("/files/upload")
+        assert r.status_code == 401
+
+    def test_upload_valid_file_returns_file_id(self):
+        with patch("main._storage_backend", self._mock_storage()), \
+             patch("main.users_col") as mock_users, \
+             patch("main.VAULT_ENCRYPTION_KEY", "00" * 32):
+            mock_users.find_one.return_value = self._user()
+            r = self._post_file("/files/upload")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["ok"] is True
+        assert data["file_id"] == self.FILE_ID
+        assert data["filename"] == "test.pdf"
+
+    def test_upload_invalid_extension(self):
+        with patch("main._storage_backend", self._mock_storage()), \
+             patch("main.users_col") as mock_users:
+            mock_users.find_one.return_value = self._user()
+            r = self._post_file("/files/upload", filename="virus.exe",
+                               content_type="application/x-msdownload")
+        assert r.status_code == 400
+
+    def test_upload_invalid_content_type(self):
+        with patch("main._storage_backend", self._mock_storage()), \
+             patch("main.users_col") as mock_users:
+            mock_users.find_one.return_value = self._user()
+            r = self._post_file("/files/upload", filename="test.pdf",
+                               content_type="application/x-msdownload")
+        assert r.status_code == 400
+
+    def test_upload_empty_file(self):
+        with patch("main._storage_backend", self._mock_storage()), \
+             patch("main.users_col") as mock_users:
+            mock_users.find_one.return_value = self._user()
+            r = self._post_file("/files/upload", file_content=b"",
+                               filename="empty.pdf")
+        assert r.status_code == 400
+
+    def test_upload_storage_unavailable(self):
+        with patch("main._storage_backend", None), \
+             patch("main.users_col") as mock_users:
+            mock_users.find_one.return_value = self._user()
+            r = self._post_file("/files/upload")
+        assert r.status_code == 503
+
+    # ── download ───────────────────────────────────────────────────────────
+
+    def test_download_requires_auth(self):
+        client = TestClient(main.app)
+        r = client.get(f"/files/{self.FILE_ID}")
+        assert r.status_code == 401
+
+    def test_download_owned_file_returns_content(self):
+        mock_storage = self._mock_storage()
+        with patch("main._storage_backend", mock_storage), \
+             patch("main.users_col") as mock_users, \
+             patch("main.decrypt_bytes", return_value=b"decrypted content"):
+            mock_users.find_one.return_value = self._user()
+            client = TestClient(main.app)
+            r = client.get(
+                f"/files/{self.FILE_ID}",
+                headers={"Authorization": f"Bearer {self._token()}"},
+            )
+        assert r.status_code == 200
+        assert r.content == b"decrypted content"
+
+    def test_download_not_owned(self):
+        mock_storage = self._mock_storage(owner="someone_else")
+        with patch("main._storage_backend", mock_storage), \
+             patch("main.users_col") as mock_users:
+            mock_users.find_one.return_value = self._user()
+            client = TestClient(main.app)
+            r = client.get(
+                f"/files/{self.FILE_ID}",
+                headers={"Authorization": f"Bearer {self._token()}"},
+            )
+        assert r.status_code == 404
+
+    def test_download_not_found(self):
+        mock_storage = self._mock_storage()
+        mock_storage.get_owner.return_value = None
+        with patch("main._storage_backend", mock_storage), \
+             patch("main.users_col") as mock_users:
+            mock_users.find_one.return_value = self._user()
+            client = TestClient(main.app)
+            r = client.get(
+                f"/files/nonexistent",
+                headers={"Authorization": f"Bearer {self._token()}"},
+            )
+        assert r.status_code == 404
+
+    # ── delete ─────────────────────────────────────────────────────────────
+
+    def test_delete_requires_auth(self):
+        client = TestClient(main.app)
+        r = client.delete(f"/files/{self.FILE_ID}")
+        assert r.status_code == 401
+
+    def test_delete_owned_file_succeeds(self):
+        mock_storage = self._mock_storage()
+        with patch("main._storage_backend", mock_storage), \
+             patch("main.users_col") as mock_users:
+            mock_users.find_one.return_value = self._user()
+            client = TestClient(main.app)
+            r = client.delete(
+                f"/files/{self.FILE_ID}",
+                headers={"Authorization": f"Bearer {self._token()}"},
+            )
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+
+    def test_delete_not_owned(self):
+        mock_storage = self._mock_storage(owner="someone_else")
+        with patch("main._storage_backend", mock_storage), \
+             patch("main.users_col") as mock_users:
+            mock_users.find_one.return_value = self._user()
+            client = TestClient(main.app)
+            r = client.delete(
+                f"/files/{self.FILE_ID}",
+                headers={"Authorization": f"Bearer {self._token()}"},
+            )
+        assert r.status_code == 404
+
+    def test_delete_not_found(self):
+        mock_storage = self._mock_storage()
+        mock_storage.delete.return_value = False
+        with patch("main._storage_backend", mock_storage), \
+             patch("main.users_col") as mock_users:
+            mock_users.find_one.return_value = self._user()
+            client = TestClient(main.app)
+            r = client.delete(
+                f"/files/{self.FILE_ID}",
+                headers={"Authorization": f"Bearer {self._token()}"},
+            )
+        assert r.status_code == 404

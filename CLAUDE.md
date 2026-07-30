@@ -1,8 +1,11 @@
-# Kinlight — Project Specification & Memory
+# Kinlight — Project Specification & Memory (deprecated)
 
-> **IMPORTANT:** `AGENTS.md` is Opencode's primary instruction file (loaded every session).
-> This file (`CLAUDE.md`) is the full reference — loaded via `opencode.json`.
+> **DEPRECATED.** This file is being migrated into `AGENTS.md` (session rules) and
+> `docs/reference.md` (architecture, API, data model, conventions). Do not add new
+> content here — update the appropriate file in `docs/` or `AGENTS.md` instead.
 > **Feature backlog** lives in `docs/features.md` — update that file when statuses change.
+> **`opencode.json` no longer loads this file.**
+>
 > Both `./index.html` AND `./frontend/index.html` must always be kept in sync.
 
 > **SESSION START INSTRUCTION:** At the beginning of every new chat, always check

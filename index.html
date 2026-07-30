@@ -678,9 +678,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 
 <div id="wm" class="mo"><div class="ms"><div class="mh"></div><div class="mt" id="wm-title">Record a Wish</div><input type="hidden" id="wm-edit-id" value=""/><div class="fi"><label>Category</label><select id="wc2"><option>Funeral & Service</option><option>Medical / end of life care</option><option>Guardian for children</option><option>Pet care</option><option>Business succession</option><option>Digital accounts</option><option>Personal message</option><option>Charitable giving</option><option>Other</option></select></div><div class="fi"><label>Wish</label><input id="wt" type="text" placeholder="e.g. I would like to be cremated"/></div><div class="fi"><label>Details</label><textarea id="wd" placeholder="Add any additional context or instructions..."></textarea></div><div class="fi"><label>Priority</label><select id="wp"><option value="high">High — must be followed</option><option value="medium" selected>Medium — strongly preferred</option><option value="low">Low — would be nice</option></select></div><div class="mr"><button class="cxb" onclick="closeM()">Cancel</button><button class="cfb" onclick="saveW()" id="wm-save-btn">Save Wish</button></div></div></div>
 
-<div id="wlm" class="mo"><div class="ms"><div class="mh"></div><div class="mt">Will Details</div><div class="fi"><label>Will status</label><select id="wl-status"><option value="signed">Signed and legally witnessed</option><option value="draft">Draft — not yet signed</option><option value="none">No Will exists yet</option></select></div><div class="fi"><label>Date signed</label><input id="wl-date" type="date"/></div><div class="fi"><label>Solicitor / law firm</label><input id="wl-solicitor" type="text" placeholder="e.g. Smith & Associates, Melbourne"/></div><div style="font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--sec);margin-bottom:8px;">Where is the original Will stored?</div><div class="fi"><label>Primary location</label><input id="wl-loc1" type="text" placeholder="e.g. Safe at home — study, top shelf"/></div><div class="fi"><label>Secondary location</label><input id="wl-loc2" type="text" placeholder="e.g. Solicitor's office, copy with executor"/></div><div class="fi"><label>Additional notes</label><textarea id="wl-notes" placeholder="Any other instructions for finding or executing the Will..."></textarea></div><div class="mr"><button class="cxb" onclick="closeM()">Cancel</button><button class="cfb" onclick="saveWill()">Save Will details</button></div></div></div>
+<div id="wlm" class="mo"><div class="ms"><div class="mh"></div><div class="mt">Will Details</div><div class="fi"><label>Will status</label><select id="wl-status"><option value="signed">Signed and legally witnessed</option><option value="draft">Draft — not yet signed</option><option value="none">No Will exists yet</option></select></div><div class="fi"><label>Date signed</label><input id="wl-date" type="date"/></div><div class="fi"><label>Solicitor / law firm</label><input id="wl-solicitor" type="text" placeholder="e.g. Smith & Associates, Melbourne"/></div><div style="font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--sec);margin-bottom:8px;">Where is the original Will stored?</div><div class="fi"><label>Primary location</label><input id="wl-loc1" type="text" placeholder="e.g. Safe at home — study, top shelf"/></div><div class="fi"><label>Secondary location</label><input id="wl-loc2" type="text" placeholder="e.g. Solicitor's office, copy with executor"/></div><div class="fi"><label>Additional notes</label><textarea id="wl-notes" placeholder="Any other instructions for finding or executing the Will..."></textarea></div><div class="fi"><label>Attach a file (optional)</label><input type="file" id="wl-file-input" style="display:none;" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.txt,.zip"/><div id="wl-file-none" style="display:block;"><button type="button" class="ob" style="padding:6px 12px;font-size:11px;" onclick="$('wl-file-input').click()"><span class="m" style="font-size:13px;">attach_file</span>Choose file</button><span style="font-size:11px;color:var(--ov2);margin-left:8px;">PDF, JPG, PNG, DOC, TXT, ZIP (max 10 MB)</span></div><div id="wl-file-attached" style="display:none;align-items:center;gap:8px;background:var(--al);border-radius:8px;padding:8px 12px;"><span class="m" style="font-size:16px;color:var(--ac);">description</span><span id="wl-file-name" style="font-size:12px;font-weight:600;color:var(--p);"></span><button type="button" class="del-btn" onclick="detachWillFile()"><span class="m">close</span></button></div></div><div class="mr"><button class="cxb" onclick="closeM()">Cancel</button><button class="cfb" onclick="saveWill()">Save Will details</button></div></div></div>
 
-<div id="sdm" class="mo"><div class="ms"><div class="mh"></div><div class="mt">Attach Document</div><div class="fi"><label>Document type</label><select id="sd-type"><option>Statement of Wishes</option><option>Enduring Power of Attorney</option><option>Advance Health Directive</option><option>Guardianship Nomination</option><option>Funeral Pre-arrangement</option><option>Business Succession Plan</option><option>Other</option></select></div><div class="fi"><label>Document name</label><input id="sd-name" type="text" placeholder="e.g. Statement of Wishes — 2024"/></div><div class="fi"><label>Where is this document stored?</label><input id="sd-loc" type="text" placeholder="e.g. Google Drive, home safe, solicitor"/></div><div class="fi"><label>Notes</label><textarea id="sd-notes" placeholder="Any additional context..."></textarea></div><div style="background:var(--sl);border-radius:10px;padding:12px;margin-bottom:14px;display:flex;align-items:center;gap:10px;"><span class="m" style="font-size:18px;color:var(--sec);">info</span><span style="font-size:12px;color:var(--ov);line-height:1.4;">File uploads will be available when the app connects to secure cloud storage. For now, record where the document is located.</span></div><div class="mr"><button class="cxb" onclick="closeM()">Cancel</button><button class="cfb" onclick="saveSupp()">Save document</button></div></div></div>
+<div id="sdm" class="mo"><div class="ms"><div class="mh"></div><div class="mt">Attach Document</div><div class="fi"><label>Document type</label><select id="sd-type"><option>Statement of Wishes</option><option>Enduring Power of Attorney</option><option>Advance Health Directive</option><option>Guardianship Nomination</option><option>Funeral Pre-arrangement</option><option>Business Succession Plan</option><option>Other</option></select></div><div class="fi"><label>Document name</label><input id="sd-name" type="text" placeholder="e.g. Statement of Wishes — 2024"/></div><div class="fi"><label>Where is this document stored?</label><input id="sd-loc" type="text" placeholder="e.g. Google Drive, home safe, solicitor"/></div><div class="fi"><label>Notes</label><textarea id="sd-notes" placeholder="Any additional context..."></textarea></div><div class="fi"><label>Attach a file (optional)</label><input type="file" id="sd-file-input" style="display:none;" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.txt,.zip"/><div id="sd-file-none" style="display:block;"><button type="button" class="ob" style="padding:6px 12px;font-size:11px;" onclick="$('sd-file-input').click()"><span class="m" style="font-size:13px;">attach_file</span>Choose file</button><span style="font-size:11px;color:var(--ov2);margin-left:8px;">PDF, JPG, PNG, DOC, TXT, ZIP (max 10 MB)</span></div><div id="sd-file-attached" style="display:none;align-items:center;gap:8px;background:var(--al);border-radius:8px;padding:8px 12px;"><span class="m" style="font-size:16px;color:var(--ac);">description</span><span id="sd-file-name" style="font-size:12px;font-weight:600;color:var(--p);"></span><button type="button" class="del-btn" onclick="detachSuppFile()"><span class="m">close</span></button></div></div><div class="mr"><button class="cxb" onclick="closeM()">Cancel</button><button class="cfb" onclick="saveSupp()">Save document</button></div></div></div>
 
 <div id="km" class="mo"><div class="ms"><div class="mh"></div><div class="mt" id="km-title">Add Contact</div><input type="hidden" id="km-edit-id" value=""/><div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;"><div class="fi"><label>First Name</label><input id="kf" type="text" placeholder="Jane"/></div><div class="fi"><label>Last Name</label><input id="kl" type="text" placeholder="Smith"/></div></div><div class="fi"><label>Relationship</label><input id="kr" type="text" placeholder="e.g. Spouse, Child, Solicitor"/></div><div class="fi"><label>Email</label><input id="ke" type="email" placeholder="jane@email.com"/></div><div class="fi"><label>Phone</label><input id="kp" type="tel" placeholder="+61 4xx xxx xxx"/></div><div class="fi"><label>Notify via</label><select id="k-notify"><option value="email">Email</option></select></div><div class="mr"><button class="cxb" onclick="closeM()">Cancel</button><button class="cfb" onclick="saveK()" id="km-save-btn">Add Contact</button></div></div></div>
 
@@ -978,6 +978,25 @@ function openM(id,cat){
   if(id==='nqm')renderNQModal();
   if(cat&&id==='wm')$('wc2').value=cat;
   if(cat&&id==='sdm')$('sd-type').value=cat;
+  // Reset file upload state
+  if(id==='wlm'){
+    _willNewFile=null;_willFileRemoved=false;$('wl-file-input').value='';
+    if(S.will&&S.will.file_id){
+      _willOldFileId=S.will.file_id;
+      $('wl-file-none').style.display='none';
+      $('wl-file-attached').style.display='flex';
+      $('wl-file-name').textContent=S.will.filename||'Attached file';
+    }else{
+      _willOldFileId=null;
+      $('wl-file-none').style.display='block';
+      $('wl-file-attached').style.display='none';
+    }
+  }
+  if(id==='sdm'){
+    _suppNewFile=null;$('sd-file-input').value='';
+    $('sd-file-none').style.display='block';
+    $('sd-file-attached').style.display='none';
+  }
   $(id).classList.add('on');
 }
 function closeM(){document.querySelectorAll('.mo').forEach(e=>e.classList.remove('on'));}
@@ -1150,20 +1169,78 @@ function editW(id){
 function delW(id){S.wishes=S.wishes.filter(w=>w.id!==id);log('Wish removed');save();toast('Removed ✓');}
 
 // ─── CRUD — WILL & DOCS ───────────────────────────────────────────────────────
-function saveWill(){
+
+// File upload state tracking
+let _willNewFile=null, _suppNewFile=null;
+let _willOldFileId=null, _willFileRemoved=false;
+
+$('wl-file-input').addEventListener('change',function(){
+  _willNewFile=this.files[0];
+  $('wl-file-none').style.display='none';
+  $('wl-file-attached').style.display='flex';
+  $('wl-file-name').textContent=_willNewFile.name;
+});
+$('sd-file-input').addEventListener('change',function(){
+  _suppNewFile=this.files[0];
+  $('sd-file-none').style.display='none';
+  $('sd-file-attached').style.display='flex';
+  $('sd-file-name').textContent=_suppNewFile.name;
+});
+
+async function uploadFile(file){
+  const fd=new FormData();fd.append('file',file);
+  try{
+    const res=await fetch(API+'/files/upload',{method:'POST',headers:{...authHeader()},body:fd});
+    if(!res.ok){const err=await res.json().catch(()=>({}));toast('Upload failed: '+(err.detail||'Unknown error'));return null;}
+    return await res.json();
+  }catch(e){toast('Upload failed — check your connection');return null;}
+}
+
+function detachWillFile(){
+  _willNewFile=null;$('wl-file-input').value='';
+  if(_willOldFileId){_willFileRemoved=true;}
+  $('wl-file-none').style.display='block';
+  $('wl-file-attached').style.display='none';
+}
+
+function detachSuppFile(){
+  _suppNewFile=null;$('sd-file-input').value='';
+  $('sd-file-none').style.display='block';
+  $('sd-file-attached').style.display='none';
+}
+
+async function saveWill(){
+  let fileId=S.will?.file_id, filename=S.will?.filename;
+  if(_willFileRemoved&&fileId){
+    fetch(API+'/files/'+fileId,{method:'DELETE',headers:authHeader()}).catch(()=>{});
+    fileId=undefined;filename=undefined;
+  }
+  if(_willNewFile){
+    if(fileId){fetch(API+'/files/'+fileId,{method:'DELETE',headers:authHeader()}).catch(()=>{});}
+    const r=await uploadFile(_willNewFile);
+    if(r&&r.file_id){fileId=r.file_id;filename=r.filename;}
+  }
   S.will={status:$('wl-status').value,date:$('wl-date').value,solicitor:$('wl-solicitor').value,loc1:$('wl-loc1').value,loc2:$('wl-loc2').value,notes:$('wl-notes').value};
+  if(fileId){S.will.file_id=fileId;S.will.filename=filename;}
   log('Will details recorded');closeM();save();toast(warmToast('Will details saved'));
 }
 
-function saveSupp(){
+async function saveSupp(){
   const n=$('sd-name').value.trim();if(!n){toast('Please enter a document name');return;}
+  let fileId, filename;
+  if(_suppNewFile){
+    const r=await uploadFile(_suppNewFile);
+    if(r&&r.file_id){fileId=r.file_id;filename=r.filename;}
+  }
   if(!S.suppDocs)S.suppDocs=[];
-  S.suppDocs.push({id:Date.now(),type:$('sd-type').value,name:n,loc:$('sd-loc').value,notes:$('sd-notes').value});
+  const doc={id:Date.now(),type:$('sd-type').value,name:n,loc:$('sd-loc').value,notes:$('sd-notes').value};
+  if(fileId){doc.file_id=fileId;doc.filename=filename;}
+  S.suppDocs.push(doc);
   log('Document recorded: '+n);closeM();['sd-name','sd-loc','sd-notes'].forEach(i=>$(i).value='');
   save();toast(warmToast('Document saved'));
 }
 
-function delSupp(id){S.suppDocs=S.suppDocs.filter(d=>d.id!==id);log('Document removed');save();toast('Removed ✓');}
+function delSupp(id){const doc=S.suppDocs.find(d=>d.id===id);if(doc&&doc.file_id){fetch(API+'/files/'+doc.file_id,{method:'DELETE',headers:authHeader()}).catch(()=>{});}S.suppDocs=S.suppDocs.filter(d=>d.id!==id);log('Document removed');save();toast('Removed ✓');}
 
 // ─── CRUD — CONTACTS ──────────────────────────────────────────────────────────
 function saveK(){
@@ -1353,8 +1430,8 @@ function generatePDF(kinId) {
   const steps=[];if(S.will&&S.will.solicitor)steps.push('Contact the solicitor: '+S.will.solicitor);if(S.will&&S.will.loc1)steps.push('Locate the original Will: '+S.will.loc1);const sow=(S.suppDocs||[]).find(d=>d.type==='Statement of Wishes');if(sow)steps.push('Find the Statement of Wishes: '+(sow.loc||sow.name));if(S.assets.length)steps.push('Review the Asset Register in this document (page 3)');steps.push('Notify relevant financial institutions and government agencies');steps.push('Keep a copy of this document in a safe place');
   steps.forEach((step,i)=>{checkPage(14);doc.setFillColor(...TEAL);doc.circle(ML+5,y+3.5,4,'F');setFont(8,'bold',WHITE);doc.text(String(i+1),ML+5,y+5.5,{align:'center'});setFont(9.5,'normal',NAVY);const stepLines=wrap(step,CW-16);doc.text(stepLines,ML+13,y+5);y+=stepLines.length*5+6;divider();});
   doc.addPage();y=MT;fillRect(0,0,W,14,NAVY);setFont(8,'normal',WHITE);doc.text('KINLIGHT  ·  WILL & LEGAL DOCUMENTS',ML,9);y=22;setFont(16,'bold',NAVY);doc.text('Will & Legal Documents',ML,y);y+=12;
-  if(S.will){sectionHeader('Will Details');labelValue('Status',WILL_STATUS_LABELS[S.will.status]||S.will.status);if(S.will.date)labelValue('Date Signed',S.will.date);if(S.will.solicitor)labelValue('Solicitor / Law Firm',S.will.solicitor);if(S.will.loc1)labelValue('Primary Location',S.will.loc1);if(S.will.loc2)labelValue('Secondary Location',S.will.loc2);if(S.will.notes)labelValue('Additional Notes',S.will.notes);y+=4;}else{fillRect(ML,y,CW,16,LGREY);setFont(9,'italic',GREY);doc.text('No Will details have been recorded.',ML+4,y+9);y+=22;}
-  if(S.suppDocs&&S.suppDocs.length){sectionHeader('Supporting Documents');S.suppDocs.forEach(d=>{checkPage(20);fillRect(ML,y,CW,18,WHITE);doc.setDrawColor(...LGREY);doc.setLineWidth(0.3);doc.rect(ML,y,CW,18);fillRect(ML,y,3,18,TEAL);setFont(9,'bold',NAVY);doc.text(d.name,ML+7,y+6);setFont(8,'normal',GREY);doc.text(d.type,ML+7,y+11);if(d.loc){setFont(8,'normal',TEAL);doc.text('Location: '+d.loc,ML+7,y+16);}y+=22;});}
+   if(S.will){sectionHeader('Will Details');labelValue('Status',WILL_STATUS_LABELS[S.will.status]||S.will.status);if(S.will.date)labelValue('Date Signed',S.will.date);if(S.will.solicitor)labelValue('Solicitor / Law Firm',S.will.solicitor);if(S.will.loc1)labelValue('Primary Location',S.will.loc1);if(S.will.loc2)labelValue('Secondary Location',S.will.loc2);if(S.will.notes)labelValue('Additional Notes',S.will.notes);if(S.will.file_id)labelValue('Attached file',S.will.filename||'File');y+=4;}else{fillRect(ML,y,CW,16,LGREY);setFont(9,'italic',GREY);doc.text('No Will details have been recorded.',ML+4,y+9);y+=22;}
+   if(S.suppDocs&&S.suppDocs.length){sectionHeader('Supporting Documents');S.suppDocs.forEach(d=>{let ch=18;if(d.loc)ch=22;if(d.file_id)ch=27;checkPage(ch+4);fillRect(ML,y,CW,ch,WHITE);doc.setDrawColor(...LGREY);doc.setLineWidth(0.3);doc.rect(ML,y,CW,ch);fillRect(ML,y,3,ch,TEAL);setFont(9,'bold',NAVY);doc.text(d.name,ML+7,y+6);setFont(8,'normal',GREY);doc.text(d.type,ML+7,y+11);let ay=y+16;if(d.loc){setFont(8,'normal',TEAL);doc.text('Location: '+d.loc,ML+7,ay);ay+=5;}if(d.file_id){setFont(8,'normal',TEAL);doc.text('Attached: '+(d.filename||'File'),ML+7,ay);}y+=ch+4;});}
   doc.addPage();y=MT;fillRect(0,0,W,14,NAVY);setFont(8,'normal',WHITE);doc.text('KINLIGHT  ·  ASSET REGISTER',ML,9);y=22;setFont(16,'bold',NAVY);doc.text('Asset Register',ML,y);y+=6;setFont(9,'normal',GREY);doc.text('All assets recorded by '+holderName+' at time of package generation.',ML,y);y+=12;
   if(!S.assets.length){fillRect(ML,y,CW,16,LGREY);setFont(9,'italic',GREY);doc.text('No assets have been recorded.',ML+4,y+9);y+=22;}else{const cats=[...new Set(S.assets.map(a=>a.category))];cats.forEach(cat=>{const items=S.assets.filter(a=>a.category===cat);sectionHeader(cat);items.forEach(a=>{checkPage(32);fillRect(ML,y,CW,28,WHITE);doc.setDrawColor(...LGREY);doc.setLineWidth(0.3);doc.rect(ML,y,CW,28);fillRect(ML,y,3,28,NAVY);let ay=y+6;setFont(10,'bold',NAVY);doc.text(a.name,ML+7,ay);ay+=5;if(a.value){setFont(9,'bold',TEAL);doc.text('$'+Math.round(a.value).toLocaleString(),ML+7,ay);ay+=4.5;}if(a.details){setFont(8,'normal',GREY);const dl=wrap(a.details,CW-14);doc.text(dl.slice(0,2),ML+7,ay);ay+=dl.slice(0,2).length*4;}if(a.beneficiary){setFont(7.5,'bold',GREY);doc.text('BENEFICIARY: '+a.beneficiary,ML+7,y+25);}y+=32;});y+=4;});}
   doc.addPage();y=MT;fillRect(0,0,W,14,NAVY);setFont(8,'normal',WHITE);doc.text('KINLIGHT  ·  MY WISHES',ML,9);y=22;setFont(16,'bold',NAVY);doc.text('My Wishes',ML,y);y+=6;setFont(9,'normal',GREY);doc.text('These are '+holderName+'\'s recorded wishes and final instructions.',ML,y);y+=12;
@@ -1581,7 +1658,7 @@ function render(){
 
   // ── Supporting docs ───────────────────────────────────────────────────────
   const docs=S.suppDocs||[];
-  $('supp-docs').innerHTML=docs.map(d=>'<div class="attach-row"><span class="m mf" style="font-size:18px;color:var(--ac);">description</span><div style="flex:1;"><div class="attach-name">'+esc(d.name)+'</div><div class="attach-size">'+esc(d.type)+(d.loc?' · '+esc(d.loc):'')+'</div></div><button class="del-btn" onclick="delSupp('+d.id+')"><span class="m">delete</span></button></div>').join('');
+  $('supp-docs').innerHTML=docs.map(d=>'<div class="attach-row"><span class="m mf" style="font-size:18px;color:var(--ac);">description</span><div style="flex:1;"><div class="attach-name">'+esc(d.name)+'</div><div class="attach-size">'+esc(d.type)+(d.loc?' · '+esc(d.loc):'')+(d.file_id?' · <span class="m" style="font-size:11px;vertical-align:middle;">attach_file</span> '+esc(d.filename||'File'):'')+'</div></div><button class="del-btn" onclick="delSupp('+d.id+')"><span class="m">delete</span></button></div>').join('');
   const sowDoc=docs.find(d=>d.type==='Statement of Wishes');
   $('sow-nudge').style.display=sowDoc?'none':'block';
   $('sow-done').style.display=sowDoc?'block':'none';

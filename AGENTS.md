@@ -1,37 +1,37 @@
 # Kinlight — Project Rules
 
 > **Always loaded.** Read this before making any changes.
-> **Full reference:** `./CLAUDE.md` — architecture, API endpoints, data model, design system, conventions.
 > **Feature backlog:** `./docs/features.md` — status of all features (Must/Should/Could/Won't).
+> **Architecture, API, data model, conventions:** `./docs/reference.md` — full reference doc (WIP: migrating from CLAUDE.md).
 
 ---
 
-## ✅ CHECKPOINT COMPLETE — F100/F101 (PWA + Push Notifications)
+## ✅ CHECKPOINT COMPLETE — F102 (File Upload via GridFS)
 
-> **Completed:** 28 July 2026
-> **Status:** Code complete (228 tests pass). VAPID keys configured on GCE. GitHub secrets set.
+> **Completed:** 30 July 2026
+> **Status:** Code complete (249 tests pass). GridFS stores encrypted files in existing Atlas cluster.
 
 ### What was built
-- **F100 (PWA):** `manifest.json`, `sw.js`, app icons, offline caching, offline check-in awareness
-- **F101 (Push):** Backend push endpoints, `pywebpush` dependency, `send_push_to_user()` called alongside all email triggers, push toggle in Settings UI
-- **CI:** VAPID env vars passed to Docker container via GitHub secrets
+- **F102 (File Upload):** Pluggable storage backend (`identity-service/storage/`) with GridFS default — swap to S3 via `STORAGE_BACKEND` env var. AES-256-GCM encryption at rest. Endpoints: `POST /files/upload`, `GET /files/{id}`, `DELETE /files/{id}` with per-user ownership enforcement. Frontend file pickers in Will and suppDoc modals. jsPDF and ReportLab PDFs show attached filenames.
 
 ### Key reminders
-- VAPID keys must NOT change between deploys (old push subscriptions break)
-- On iOS, push only works after installing to home screen
-- Offline check-in flag: `ee_pending_checkin` in localStorage
-- When editing `index.html`, also sync PWA files:
+- `python-multipart` added to `requirements.txt` (needed for FastAPI `UploadFile`)
+- File endpoints rate-limited: upload 10/min/user, download 30/min/user, delete 10/min/user
+- Ownership enforced via GridFS metadata `userId` — not vault content
+- Orphaned files possible if vault save never happens after upload (acceptable for MVP)
+- When editing `index.html`, also sync frontend files:
   ```bash
   cp index.html frontend/index.html
   cp manifest.json sw.js favicon.svg icon-192.png icon-512.png frontend/
   ```
+- Storage backend defaults to `gridfs`; no env var needed unless swapping to S3
 
 ---
 
 ## Before pushing
 
 ```bash
-./test.sh   # Runs pytest — must be 228 passed
+./test.sh   # Runs pytest — must be 249 passed
 cp index.html frontend/index.html   # Keep both copies in sync
 # Also sync PWA files (F100):
 cp manifest.json sw.js favicon.svg icon-192.png icon-512.png frontend/
