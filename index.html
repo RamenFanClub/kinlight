@@ -1439,7 +1439,7 @@ function generatePDF(kinId) {
   doc.addPage();y=MT;fillRect(0,0,W,14,NAVY);setFont(8,'normal',WHITE);doc.text('KINLIGHT  ·  KEY CONTACTS',ML,9);y=22;setFont(16,'bold',NAVY);doc.text('Key People to Contact',ML,y);y+=12;
   if(!S.kin.length){fillRect(ML,y,CW,16,LGREY);setFont(9,'italic',GREY);doc.text('No contacts have been recorded.',ML+4,y+9);y+=22;}else{S.kin.forEach((contact,i)=>{checkPage(30);fillRect(ML,y,CW,26,i%2===0?WHITE:LGREY);doc.setDrawColor(...LGREY);doc.setLineWidth(0.3);doc.rect(ML,y,CW,26);doc.setFillColor(...NAVY);doc.circle(ML+10,y+13,7,'F');const initials=((contact.first[0]||'')+(contact.last?contact.last[0]:'')).toUpperCase();setFont(8,'bold',WHITE);doc.text(initials,ML+10,y+15.5,{align:'center'});setFont(10,'bold',NAVY);doc.text(contact.first+' '+contact.last,ML+22,y+8);setFont(8,'normal',GREY);doc.text(contact.rel||'Contact',ML+22,y+13);if(contact.email){setFont(8,'normal',TEAL);doc.text(contact.email,ML+22,y+18);}if(contact.phone){setFont(8,'normal',GREY);doc.text(contact.phone,ML+22,y+22);}y+=30;});}
   const totalPages=doc.getNumberOfPages();for(let i=1;i<=totalPages;i++){doc.setPage(i);fillRect(0,H-12,W,12,NAVY);setFont(7,'normal',[184,176,160]);doc.text('Kinlight  ·  Prepared for '+k.first+' '+k.last+'  ·  Confidential',ML,H-5);doc.text('Page '+i+' of '+totalPages,W-MR,H-5,{align:'right'});}
-  const fname='Emergency-Exit-'+k.first+'-'+k.last+'.pdf';doc.save(fname);log('Package previewed for '+k.first+' '+k.last);save();toast('Package downloaded ✓');
+  const fname='Kinlight-'+k.first+'-'+k.last+'.pdf';doc.save(fname);log('Package previewed for '+k.first+' '+k.last);save();toast('Package downloaded ✓');
 }
 
 function render(){
