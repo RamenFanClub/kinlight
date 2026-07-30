@@ -9,10 +9,11 @@
 ## ✅ CHECKPOINT COMPLETE — F102 (File Upload via GridFS)
 
 > **Completed:** 30 July 2026
-> **Status:** Code complete (249 tests pass). GridFS stores encrypted files in existing Atlas cluster.
+> **Status:** Code complete (255 tests pass). GridFS stores encrypted files in existing Atlas cluster.
 
 ### What was built
 - **F102 (File Upload):** Pluggable storage backend (`identity-service/storage/`) with GridFS default — swap to S3 via `STORAGE_BACKEND` env var. AES-256-GCM encryption at rest. Endpoints: `POST /files/upload`, `GET /files/{id}`, `DELETE /files/{id}` with per-user ownership enforcement. Frontend file pickers in Will and suppDoc modals. jsPDF and ReportLab PDFs show attached filenames.
+- **Notification attachments:** Overdue notification emails now include uploaded Will and Statement of Wishes files as attachments alongside the generated PDF (20 MB cumulative limit). `send_notification_email` iterates vault content for `will.file_id` and `suppDocs[].file_id`, downloads from storage, decrypts, and attaches. Graceful skip if storage unavailable, file missing, or size limit exceeded.
 
 ### Key reminders
 - `python-multipart` added to `requirements.txt` (needed for FastAPI `UploadFile`)
@@ -31,7 +32,7 @@
 ## Before pushing
 
 ```bash
-./test.sh   # Runs pytest — must be 249 passed
+./test.sh   # Runs pytest — must be 255 passed
 cp index.html frontend/index.html   # Keep both copies in sync
 # Also sync PWA files (F100):
 cp manifest.json sw.js favicon.svg icon-192.png icon-512.png frontend/

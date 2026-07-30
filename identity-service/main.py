@@ -649,16 +649,17 @@ def get_contacts_to_notify(vault_doc: dict, days_overdue: int) -> list:
 
 # ─── EMAIL HELPERS ────────────────────────────────────────────────────────────
 
-def _send_email(to: str, subject: str, body: str, attachment: Optional[dict] = None) -> bool:
-    """Low-level Resend dispatch. Returns True on success."""
+def _send_email(to: str, subject: str, body: str, attachments: Optional[list] = None) -> bool:
+    """Low-level Resend dispatch. Returns True on success.
+    attachments is a list of {filename, content} dicts (content is base64-encoded)."""
     payload: dict = {
         "from": FROM_EMAIL,
         "to": [to],
         "subject": subject,
         "text": body,
     }
-    if attachment:
-        payload["attachments"] = [attachment]
+    if attachments:
+        payload["attachments"] = attachments
 
     try:
         response = requests.post(
@@ -807,17 +808,76 @@ The Kinlight team
     return sent
 
 
+def _download_and_decrypt(file_id: str) -> Optional[bytes]:
+    """Download a file from the storage backend and decrypt it.
+    Returns plaintext bytes, or None if unavailable / not found / decrypt fails."""
+    if _storage_backend is None:
+        return None
+    result = _storage_backend.download(file_id)
+    if result is None:
+        logger.warning(f"File {file_id} not found in storage backend")
+        return None
+    encrypted_data, _, _ = result
+    try:
+        return decrypt_bytes(encrypted_data)
+    except Exception as e:
+        logger.warning(f"Failed to decrypt file {file_id}: {e}")
+        return None
+
+
 def send_notification_email(contact: dict, vault_doc: dict, holder_name: str = "the vault holder") -> bool:
-    """Send overdue notification email with PDF attachment to a contact."""
+    """Send overdue notification email with PDF + any uploaded file attachments to a contact."""
     first = contact.get("first", "")
     last = contact.get("last", "")
     email = contact.get("email", "")
 
     pdf_bytes = generate_pdf_for_contact(contact, vault_doc, holder_name)
-    attachment = {
+    attachments = [{
         "filename": f"Kinlight-{first}-{last}.pdf",
         "content": base64.b64encode(pdf_bytes).decode("utf-8"),
-    }
+    }]
+
+    total_size = len(pdf_bytes)
+    max_attach = 20 * 1024 * 1024  # 20 MB cumulative — 5 MB headroom for encoding overhead
+
+    content = decrypt_content(vault_doc.get("content"))
+
+    # Will attachment
+    will = content.get("will") if isinstance(content, dict) else None
+    if will and will.get("file_id"):
+        data = _download_and_decrypt(will["file_id"])
+        if data:
+            fsize = len(data)
+            if total_size + fsize <= max_attach:
+                attachments.append({
+                    "filename": will.get("filename", "Will.pdf"),
+                    "content": base64.b64encode(data).decode("utf-8"),
+                })
+                total_size += fsize
+            else:
+                logger.warning(
+                    f"Will file skipped for {first} {last} — would exceed "
+                    f"{max_attach // (1024*1024)} MB attachment limit"
+                )
+
+    # Supplementary document attachments
+    supp_docs = content.get("suppDocs", []) if isinstance(content, dict) else []
+    for d in supp_docs:
+        if d.get("file_id"):
+            data = _download_and_decrypt(d["file_id"])
+            if data:
+                fsize = len(data)
+                if total_size + fsize <= max_attach:
+                    attachments.append({
+                        "filename": d.get("filename", "document.pdf"),
+                        "content": base64.b64encode(data).decode("utf-8"),
+                    })
+                    total_size += fsize
+                else:
+                    logger.warning(
+                        f"SuppDoc file skipped for {first} {last} — would exceed "
+                        f"{max_attach // (1024*1024)} MB attachment limit"
+                    )
 
     body = f"""Dear {first},
 
@@ -831,9 +891,10 @@ If you believe this has been sent in error, please disregard this message.
 
 The Kinlight team
 """
-    sent = _send_email(email, f"Important: Kinlight package from {holder_name}", body, attachment)
+    file_count = len(attachments) - 1
+    sent = _send_email(email, f"Important: Kinlight package from {holder_name}", body, attachments)
     if sent:
-        logger.info(f"Notification sent to {first} at {email}")
+        logger.info(f"Notification sent to {first} at {email} ({file_count} file attachment{'s' if file_count != 1 else ''})")
     return sent
 
 
@@ -1480,7 +1541,7 @@ To change what your contacts would receive, edit your vault content (assets, wis
 """
 
     subject = "Kinlight — test notification"
-    sent = _send_email(holder_email, subject, body, attachment)
+    sent = _send_email(holder_email, subject, body, [attachment])
 
     if not sent:
         raise HTTPException(status_code=500, detail="Failed to send test email. Check server logs.")

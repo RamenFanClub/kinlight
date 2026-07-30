@@ -51,6 +51,8 @@ from main import (
     decrypt_content,
     encrypt_bytes,
     decrypt_bytes,
+    send_notification_email,
+    _download_and_decrypt,
 )
 
 
@@ -2537,3 +2539,160 @@ class TestFileUploadEndpoints:
                 headers={"Authorization": f"Bearer {self._token()}"},
             )
         assert r.status_code == 404
+
+
+# ─── NOTIFICATION EMAIL FILE ATTACHMENTS ─────────────────────────────────────
+
+class TestNotificationAttachments:
+    """F102: Uploaded files (Will, suppDocs) are included as email attachments
+    alongside the generated PDF in overdue notification emails."""
+
+    WILL_DATA = b"will content"
+    SUPP_DATA = b"supp doc content"
+
+    @staticmethod
+    def _vault_doc():
+        return {
+            "_id": ObjectId("cccccccccccccccccccccccc"),
+            "userId": ObjectId("ffffffffffffffffffffffff"),
+            "lastCheckin": now_utc(),
+            "notifyProto": "notify_immediately",
+            "overdueNotificationSent": False,
+        }
+
+    @staticmethod
+    def _contact():
+        return {
+            "first": "Jane",
+            "last": "Doe",
+            "email": "jane@example.com",
+        }
+
+    # ── will attachment ─────────────────────────────────────────────────────
+
+    def test_includes_will_attachment(self):
+        with patch("main._send_email") as mock_send, \
+             patch("main.decrypt_content") as mock_decrypt, \
+             patch("main._download_and_decrypt") as mock_dl, \
+             patch("main.generate_pdf_for_contact", return_value=b"pdf"):
+            mock_decrypt.return_value = {
+                "will": {"file_id": "will123", "filename": "MyWill.pdf"},
+                "suppDocs": [],
+                "kin": [],
+            }
+            mock_dl.return_value = self.WILL_DATA
+            mock_send.return_value = True
+
+            send_notification_email(self._contact(), self._vault_doc(), "Test Holder")
+
+        attachments = mock_send.call_args[0][3]
+        assert len(attachments) == 2
+        assert attachments[0]["filename"].startswith("Kinlight-")
+        assert attachments[1]["filename"] == "MyWill.pdf"
+
+    # ── suppDoc attachment ──────────────────────────────────────────────────
+
+    def test_includes_suppdoc_attachment(self):
+        with patch("main._send_email") as mock_send, \
+             patch("main.decrypt_content") as mock_decrypt, \
+             patch("main._download_and_decrypt") as mock_dl, \
+             patch("main.generate_pdf_for_contact", return_value=b"pdf"):
+            mock_decrypt.return_value = {
+                "will": None,
+                "suppDocs": [{"id": 1, "type": "Statement of Wishes",
+                              "name": "SOW", "file_id": "supp456",
+                              "filename": "Statement.pdf"}],
+                "kin": [],
+            }
+            mock_dl.return_value = self.SUPP_DATA
+            mock_send.return_value = True
+
+            send_notification_email(self._contact(), self._vault_doc(), "Test Holder")
+
+        attachments = mock_send.call_args[0][3]
+        assert len(attachments) == 2
+        assert attachments[1]["filename"] == "Statement.pdf"
+
+    # ── multiple attachments ────────────────────────────────────────────────
+
+    def test_includes_pdf_plus_will_plus_suppdoc(self):
+        with patch("main._send_email") as mock_send, \
+             patch("main.decrypt_content") as mock_decrypt, \
+             patch("main._download_and_decrypt") as mock_dl, \
+             patch("main.generate_pdf_for_contact", return_value=b"pdf"):
+            mock_decrypt.return_value = {
+                "will": {"file_id": "will123", "filename": "Will.pdf"},
+                "suppDocs": [{"id": 1, "type": "Statement of Wishes",
+                              "name": "SOW", "file_id": "supp456",
+                              "filename": "SoW.pdf"}],
+                "kin": [],
+            }
+            mock_dl.return_value = self.WILL_DATA
+            mock_send.return_value = True
+
+            send_notification_email(self._contact(), self._vault_doc(), "Test Holder")
+
+        attachments = mock_send.call_args[0][3]
+        assert len(attachments) == 3
+        filenames = [a["filename"] for a in attachments]
+        assert any("Kinlight-" in f for f in filenames)
+        assert "Will.pdf" in filenames
+        assert "SoW.pdf" in filenames
+
+    # ── size limit ──────────────────────────────────────────────────────────
+
+    def test_skips_file_when_over_limit(self):
+        with patch("main._send_email") as mock_send, \
+             patch("main.decrypt_content") as mock_decrypt, \
+             patch("main._download_and_decrypt") as mock_dl, \
+             patch("main.generate_pdf_for_contact", return_value=b"pdf"):
+            mock_decrypt.return_value = {
+                "will": {"file_id": "will123", "filename": "huge.pdf"},
+                "suppDocs": [],
+                "kin": [],
+            }
+            mock_dl.return_value = b"x" * (21 * 1024 * 1024)  # 21 MB — over limit
+            mock_send.return_value = True
+
+            send_notification_email(self._contact(), self._vault_doc(), "Test Holder")
+
+        attachments = mock_send.call_args[0][3]
+        assert len(attachments) == 1  # PDF only, will file skipped
+
+    # ── storage not available ───────────────────────────────────────────────
+
+    def test_graceful_when_storage_unavailable(self):
+        with patch("main._send_email") as mock_send, \
+             patch("main.decrypt_content") as mock_decrypt, \
+             patch("main._download_and_decrypt", return_value=None), \
+             patch("main.generate_pdf_for_contact", return_value=b"pdf"):
+            mock_decrypt.return_value = {
+                "will": {"file_id": "will123", "filename": "Will.pdf"},
+                "suppDocs": [{"id": 1, "type": "SOW", "name": "SOW",
+                              "file_id": "supp456", "filename": "SOW.pdf"}],
+                "kin": [],
+            }
+            mock_send.return_value = True
+
+            send_notification_email(self._contact(), self._vault_doc(), "Test Holder")
+
+        attachments = mock_send.call_args[0][3]
+        assert len(attachments) == 1  # PDF only — files skipped gracefully
+
+    # ── no files attached ───────────────────────────────────────────────────
+
+    def test_pdf_only_when_no_files(self):
+        with patch("main._send_email") as mock_send, \
+             patch("main.decrypt_content") as mock_decrypt, \
+             patch("main.generate_pdf_for_contact", return_value=b"pdf"):
+            mock_decrypt.return_value = {
+                "will": {"status": "draft"},  # no file_id
+                "suppDocs": [{"id": 1, "type": "SOW", "name": "SOW"}],  # no file_id
+                "kin": [],
+            }
+            mock_send.return_value = True
+
+            send_notification_email(self._contact(), self._vault_doc(), "Test Holder")
+
+        attachments = mock_send.call_args[0][3]
+        assert len(attachments) == 1  # PDF only
