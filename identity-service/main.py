@@ -1524,10 +1524,38 @@ def test_notification(request: Request, current_user: dict = Depends(get_current
     last = sample.get("last", "")
 
     pdf_bytes = generate_pdf_for_contact(sample, vault_doc, holder_name)
-    attachment = {
+    attachments = [{
         "filename": f"Kinlight-Test-{first}-{last}.pdf",
         "content": base64.b64encode(pdf_bytes).decode("utf-8"),
-    }
+    }]
+
+    total_size = len(pdf_bytes)
+    max_attach = 20 * 1024 * 1024
+
+    # Include uploaded file attachments (same logic as send_notification_email)
+    will = vault_content.get("will") if isinstance(vault_content, dict) else None
+    if will and will.get("file_id"):
+        data = _download_and_decrypt(will["file_id"])
+        if data:
+            fsize = len(data)
+            if total_size + fsize <= max_attach:
+                attachments.append({
+                    "filename": will.get("filename", "Will.pdf"),
+                    "content": base64.b64encode(data).decode("utf-8"),
+                })
+                total_size += fsize
+
+    for d in vault_content.get("suppDocs", []) if isinstance(vault_content, dict) else []:
+        if d.get("file_id"):
+            data = _download_and_decrypt(d["file_id"])
+            if data:
+                fsize = len(data)
+                if total_size + fsize <= max_attach:
+                    attachments.append({
+                        "filename": d.get("filename", "document.pdf"),
+                        "content": base64.b64encode(data).decode("utf-8"),
+                    })
+                    total_size += fsize
 
     body = f"""Hi {holder_name},
 
@@ -1541,7 +1569,7 @@ To change what your contacts would receive, edit your vault content (assets, wis
 """
 
     subject = "Kinlight — test notification"
-    sent = _send_email(holder_email, subject, body, [attachment])
+    sent = _send_email(holder_email, subject, body, attachments)
 
     if not sent:
         raise HTTPException(status_code=500, detail="Failed to send test email. Check server logs.")
