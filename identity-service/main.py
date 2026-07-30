@@ -14,6 +14,7 @@ import os
 import logging
 import re as re_mod
 import secrets
+import zipfile
 from xml.sax.saxutils import escape as xml_escape
 
 import bcrypt
@@ -1494,6 +1495,71 @@ def contact_nominate_route(request: Request, body: dict, current_user: dict = De
     """F91: thin HTTP wrapper — rate limiting lives here, business logic in contact_nominate()."""
     return contact_nominate(body, current_user)
 
+
+
+@app.get("/preview-package/{contact_index}")
+@limiter.limit("5/minute", key_func=get_user_or_ip)
+def preview_package(
+    request: Request,
+    contact_index: int,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Generate a ZIP package for a single contact — includes the full PDF report
+    plus any uploaded Will and supplementary document files. Returns ZIP binary.
+    """
+    vault_doc = vaults_col.find_one({"userId": current_user["_id"]})
+    if not vault_doc:
+        raise HTTPException(status_code=400, detail="No vault found.")
+
+    vault_content: dict = decrypt_content(vault_doc.get("content", {}))
+    contacts: list = vault_content.get("kin") or []
+    if not contacts:
+        raise HTTPException(status_code=400, detail="No contacts in vault.")
+    if contact_index < 0 or contact_index >= len(contacts):
+        raise HTTPException(status_code=404, detail="Contact not found.")
+
+    contact = contacts[contact_index]
+    first = contact.get("first", "")
+    last = contact.get("last", "")
+    holder_name = current_user.get("name", "the vault holder")
+
+    pdf_bytes = generate_pdf_for_contact(contact, vault_doc, holder_name)
+
+    buf = io.BytesIO()
+    file_count = 1  # PDF
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(f"Kinlight-{first}-{last}.pdf", pdf_bytes)
+
+        will = vault_content.get("will") if isinstance(vault_content, dict) else None
+        if will and will.get("file_id"):
+            data = _download_and_decrypt(will["file_id"])
+            if data:
+                zf.writestr(will.get("filename", "Will.pdf"), data)
+                file_count += 1
+
+        for d in vault_content.get("suppDocs", []) if isinstance(vault_content, dict) else []:
+            if d.get("file_id"):
+                data = _download_and_decrypt(d["file_id"])
+                if data:
+                    zf.writestr(d.get("filename", "document.pdf"), data)
+                    file_count += 1
+
+    buf.seek(0)
+
+    logger.info(
+        f"Preview package generated for {first} {last} "
+        f"({file_count} files) by user {current_user.get('username','')}"
+    )
+
+    from fastapi.responses import Response
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="Kinlight-{first}-{last}.zip"',
+        },
+    )
 
 
 @app.post("/test-notification")

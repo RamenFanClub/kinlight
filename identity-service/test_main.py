@@ -2696,3 +2696,138 @@ class TestNotificationAttachments:
 
         attachments = mock_send.call_args[0][3]
         assert len(attachments) == 1  # PDF only
+
+# ─── PREVIEW PACKAGE ENDPOINT ────────────────────────────────────────────────
+
+class TestPreviewPackage:
+    """GET /preview-package/{contact_index} — server-generated ZIP with PDF + files."""
+
+    USER_ID = ObjectId("ffffffffffffffffffffffff")
+
+    @staticmethod
+    def _token():
+        return create_token(str(TestPreviewPackage.USER_ID))
+
+    @staticmethod
+    def _user():
+        return {
+            "_id": TestPreviewPackage.USER_ID,
+            "username": "tester_01",
+            "name": "Test Holder",
+        }
+
+    @staticmethod
+    def _vault_doc():
+        return {
+            "_id": ObjectId("eeeeeeeeeeeeeeeeeeeeeeee"),
+            "userId": TestPreviewPackage.USER_ID,
+            "content": "encrypted_blob",
+            "lastCheckin": now_utc(),
+        }
+
+    # ── auth ────────────────────────────────────────────────────────────────
+
+    def test_requires_auth(self):
+        client = TestClient(main.app)
+        r = client.get("/preview-package/0")
+        assert r.status_code == 401
+
+    # ── not found ───────────────────────────────────────────────────────────
+
+    def test_index_out_of_range(self):
+        with patch("main.users_col") as mock_users, \
+             patch("main.vaults_col") as mock_vaults, \
+             patch("main.decrypt_content") as mock_decrypt:
+            mock_users.find_one.return_value = self._user()
+            mock_vaults.find_one.return_value = self._vault_doc()
+            mock_decrypt.return_value = {"kin": [{"first": "A", "last": "B"}]}
+
+            client = TestClient(main.app)
+            r = client.get(
+                "/preview-package/5",
+                headers={"Authorization": f"Bearer {self._token()}"},
+            )
+        assert r.status_code == 404
+
+    def test_no_vault(self):
+        with patch("main.users_col") as mock_users, \
+             patch("main.vaults_col") as mock_vaults:
+            mock_users.find_one.return_value = self._user()
+            mock_vaults.find_one.return_value = None
+
+            client = TestClient(main.app)
+            r = client.get(
+                "/preview-package/0",
+                headers={"Authorization": f"Bearer {self._token()}"},
+            )
+        assert r.status_code == 400
+
+    # ── success ─────────────────────────────────────────────────────────────
+
+    def test_returns_zip_with_pdf(self):
+        with patch("main.users_col") as mock_users, \
+             patch("main.vaults_col") as mock_vaults, \
+             patch("main.decrypt_content") as mock_decrypt, \
+             patch("main.generate_pdf_for_contact", return_value=b"fake pdf"), \
+             patch("main._download_and_decrypt", return_value=None):
+            mock_users.find_one.return_value = self._user()
+            mock_vaults.find_one.return_value = self._vault_doc()
+            mock_decrypt.return_value = {
+                "will": None,
+                "suppDocs": [],
+                "kin": [{"first": "Jane", "last": "Doe"}],
+            }
+
+            client = TestClient(main.app)
+            r = client.get(
+                "/preview-package/0",
+                headers={"Authorization": f"Bearer {self._token()}"},
+            )
+        assert r.status_code == 200
+        assert r.headers["Content-Type"] == "application/zip"
+        assert "attachment" in r.headers["Content-Disposition"]
+
+    def test_returns_zip_with_files(self):
+        with patch("main.users_col") as mock_users, \
+             patch("main.vaults_col") as mock_vaults, \
+             patch("main.decrypt_content") as mock_decrypt, \
+             patch("main.generate_pdf_for_contact", return_value=b"fake pdf"), \
+             patch("main._download_and_decrypt") as mock_dl:
+            mock_users.find_one.return_value = self._user()
+            mock_vaults.find_one.return_value = self._vault_doc()
+            mock_decrypt.return_value = {
+                "will": {"file_id": "w1", "filename": "Will.pdf"},
+                "suppDocs": [{"id": 1, "type": "SOW", "file_id": "s1", "filename": "SoW.pdf"}],
+                "kin": [{"first": "Jane", "last": "Doe"}],
+            }
+            mock_dl.return_value = b"file content"
+
+            client = TestClient(main.app)
+            r = client.get(
+                "/preview-package/0",
+                headers={"Authorization": f"Bearer {self._token()}"},
+            )
+        assert r.status_code == 200
+        assert r.headers["Content-Type"] == "application/zip"
+
+    def test_returns_zip_when_no_files_attached(self):
+        with patch("main.users_col") as mock_users, \
+             patch("main.vaults_col") as mock_vaults, \
+             patch("main.decrypt_content") as mock_decrypt, \
+             patch("main.generate_pdf_for_contact", return_value=b"fake pdf"):
+            mock_users.find_one.return_value = self._user()
+            mock_vaults.find_one.return_value = self._vault_doc()
+            mock_decrypt.return_value = {
+                "will": {"status": "draft"},
+                "suppDocs": [],
+                "kin": [{"first": "Jane", "last": "Doe"}],
+            }
+
+            client = TestClient(main.app)
+            r = client.get(
+                "/preview-package/0",
+                headers={"Authorization": f"Bearer {self._token()}"},
+            )
+        assert r.status_code == 200
+        assert r.headers["Content-Type"] == "application/zip"
+

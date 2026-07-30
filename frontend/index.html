@@ -1383,65 +1383,37 @@ function renderNQModal(){
 // ─── GENERATE ALL PDFS ────────────────────────────────────────────────────────
 function generateAllPDFs(){
   if(!S.kin.length){toast('No contacts to generate packages for');return;}
-  if(typeof window.jspdf==='undefined'){toast('PDF library not loaded yet — try again');return;}
-  S.kin.forEach((k,i)=>setTimeout(()=>generatePDF(k.id),i*600));
-  log('Dry run: generated packages for all '+S.kin.length+' contacts');
+  S.kin.forEach((k,i)=>setTimeout(()=>generatePDF(k.id),i*800));
+  log('Preview: requested packages for all '+S.kin.length+' contacts');
   save();
-  toast(pl(S.kin.length,'package')+' generated ✓');
+  toast(pl(S.kin.length,'package')+' downloading ✓');
 }
 
-// ─── F06: TEST NOTIFICATION ──────────────────────────────────────────────────────
-async function testNotification(){
-  if(!S.kin.length){toast('Add a contact first');return;}
-  const token=sessionStorage.getItem('ee_token');
-  if(!token){toast('Please log in first');return;}
+async function generatePDF(kinId){
+  const idx=S.kin.findIndex(x=>x.id===kinId);
+  if(idx<0)return;
+  const k=S.kin[idx];
   try{
-    const res=await fetch(API+'/test-notification',{method:'POST',headers:{...authHeader(),'Content-Type':'application/json'}});
-    const data=await res.json();
-    if(res.ok){toast('Test notification sent ✓');log('Test notification sent');}
-    else{toast(data.detail||'Failed to send test notification');}
-  }catch(e){toast('Could not reach server');}
+    const res=await fetch(API+'/preview-package/'+idx,{
+      headers:authHeader()
+    });
+    if(!res.ok){
+      const err=await res.json().catch(()=>({}));
+      toast('Preview failed: '+(err.detail||'Server error'));
+      return;
+    }
+    const blob=await res.blob();
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;a.download='Kinlight-'+k.first+'-'+k.last+'.zip';
+    document.body.appendChild(a);a.click();a.remove();
+    URL.revokeObjectURL(url);
+    log('Package previewed for '+k.first+' '+k.last);
+    toast('Package downloaded ✓');
+  }catch(e){
+    toast('Preview failed — check your connection');
+  }
 }
-
-// ─── PDF GENERATION ──────────────────────────────────────────────────────────
-function generatePDF(kinId) {
-  if (typeof window.jspdf === 'undefined') { toast('PDF library not loaded yet — try again'); return; }
-  const { jsPDF } = window.jspdf;
-  const k = S.kin.find(x => x.id === kinId);
-  if (!k) return;
-  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
-  const W = 210, H = 297, ML = 20, MR = 20, MT = 20, CW = W - ML - MR;
-  let y = MT;
-  const NAVY=[46,43,38],TEAL=[90,122,110],GREY=[107,99,88],LGREY=[237,229,216],WHITE=[253,249,244],RED=[186,26,26];
-  function setFont(size,weight,color){doc.setFontSize(size);doc.setFont('helvetica',weight||'normal');doc.setTextColor(...(color||NAVY));}
-  function fillRect(x,fy,w,h,color){doc.setFillColor(...color);doc.rect(x,fy,w,h,'F');}
-  function wrap(text,maxW){return doc.splitTextToSize(text||'',maxW);}
-  function checkPage(needed){if(y+needed>H-20){doc.addPage();y=MT;}}
-  function sectionHeader(title){checkPage(14);fillRect(ML,y,CW,10,LGREY);setFont(9,'bold',GREY);doc.text(title.toUpperCase(),ML+4,y+6.5);y+=14;}
-  function divider(){doc.setDrawColor(...LGREY);doc.setLineWidth(0.3);doc.line(ML,y,ML+CW,y);y+=5;}
-  function labelValue(label,value,indent){if(!value)return;const x=ML+(indent||0),w=CW-(indent||0);checkPage(12);setFont(7.5,'bold',GREY);doc.text(label.toUpperCase(),x,y);y+=4;setFont(9,'normal',NAVY);const lines=wrap(value,w);doc.text(lines,x,y);y+=lines.length*4.5+3;}
-  const holderName=(JSON.parse(sessionStorage.getItem('ee_user')||'{}').name)||'the vault holder';
-  fillRect(0,0,W,52,NAVY);doc.setFillColor(61,58,52);doc.rect(0,46,W,6,'F');setFont(9,'normal',[184,176,160]);doc.text('KINLIGHT — CONFIDENTIAL PACKAGE',ML,51);setFont(22,'bold',WHITE);doc.text('Kinlight',ML,22);setFont(11,'normal',[184,176,160]);doc.text('Prepared for '+k.first+' '+k.last,ML,30);setFont(9,'normal',[184,176,160]);doc.text('Generated '+new Date().toLocaleDateString('en-AU',{day:'numeric',month:'long',year:'numeric'}),ML,38);
-  y=65;
-  fillRect(ML,y,CW,28,[233,238,236]);doc.setDrawColor(...TEAL);doc.setLineWidth(1);doc.line(ML,y,ML,y+28);setFont(9,'bold',NAVY);doc.text('This document has been prepared for you by '+holderName+'.',ML+5,y+7);setFont(8.5,'normal',GREY);const introLines=wrap('If you are reading this, '+holderName+' has not confirmed their check-in within the required period. This package contains everything you need to act on their behalf. No login or app is required.',CW-10);doc.text(introLines,ML+5,y+13);y+=36;
-  sectionHeader('Personal Letter');
-  if(k.letter&&k.letter.trim()){const letterLines=wrap(k.letter.trim(),CW-16);const letterHeight=Math.max(40,letterLines.length*5.5+20);checkPage(letterHeight);fillRect(ML,y,CW,letterHeight,[253,249,244]);doc.setDrawColor(...TEAL);doc.setLineWidth(1.2);doc.line(ML,y,ML,y+letterHeight);setFont(10,'italic',NAVY);doc.text(letterLines,ML+7,y+10);y+=letterHeight+8;}else{fillRect(ML,y,CW,38,[253,249,244]);doc.setDrawColor(200,210,220);doc.setLineWidth(0.4);doc.rect(ML,y,CW,38);setFont(9,'italic',GREY);doc.text('[ A personal letter from '+holderName+' will appear here once written. ]',ML+4,y+8);setFont(8,'normal',GREY);const letterNote=wrap('To add a personal letter for this contact, return to the Kinlight app, open their contact card, and tap "Write personal letter".',CW-8);doc.text(letterNote,ML+4,y+16);y+=46;}
-  doc.addPage();y=MT;fillRect(0,0,W,14,NAVY);setFont(8,'normal',WHITE);doc.text('KINLIGHT  ·  ACTION CHECKLIST',ML,9);y=22;setFont(16,'bold',NAVY);doc.text('What to do first',ML,y);y+=5;setFont(9,'normal',GREY);doc.text('Work through these steps in order. Take your time.',ML,y);y+=12;
-  const steps=[];if(S.will&&S.will.solicitor)steps.push('Contact the solicitor: '+S.will.solicitor);if(S.will&&S.will.loc1)steps.push('Locate the original Will: '+S.will.loc1);const sow=(S.suppDocs||[]).find(d=>d.type==='Statement of Wishes');if(sow)steps.push('Find the Statement of Wishes: '+(sow.loc||sow.name));if(S.assets.length)steps.push('Review the Asset Register in this document (page 3)');steps.push('Notify relevant financial institutions and government agencies');steps.push('Keep a copy of this document in a safe place');
-  steps.forEach((step,i)=>{checkPage(14);doc.setFillColor(...TEAL);doc.circle(ML+5,y+3.5,4,'F');setFont(8,'bold',WHITE);doc.text(String(i+1),ML+5,y+5.5,{align:'center'});setFont(9.5,'normal',NAVY);const stepLines=wrap(step,CW-16);doc.text(stepLines,ML+13,y+5);y+=stepLines.length*5+6;divider();});
-  doc.addPage();y=MT;fillRect(0,0,W,14,NAVY);setFont(8,'normal',WHITE);doc.text('KINLIGHT  ·  WILL & LEGAL DOCUMENTS',ML,9);y=22;setFont(16,'bold',NAVY);doc.text('Will & Legal Documents',ML,y);y+=12;
-   if(S.will){sectionHeader('Will Details');labelValue('Status',WILL_STATUS_LABELS[S.will.status]||S.will.status);if(S.will.date)labelValue('Date Signed',S.will.date);if(S.will.solicitor)labelValue('Solicitor / Law Firm',S.will.solicitor);if(S.will.loc1)labelValue('Primary Location',S.will.loc1);if(S.will.loc2)labelValue('Secondary Location',S.will.loc2);if(S.will.notes)labelValue('Additional Notes',S.will.notes);if(S.will.file_id)labelValue('Attached file',S.will.filename||'File');y+=4;}else{fillRect(ML,y,CW,16,LGREY);setFont(9,'italic',GREY);doc.text('No Will details have been recorded.',ML+4,y+9);y+=22;}
-   if(S.suppDocs&&S.suppDocs.length){sectionHeader('Supporting Documents');S.suppDocs.forEach(d=>{let ch=18;if(d.loc)ch=22;if(d.file_id)ch=27;checkPage(ch+4);fillRect(ML,y,CW,ch,WHITE);doc.setDrawColor(...LGREY);doc.setLineWidth(0.3);doc.rect(ML,y,CW,ch);fillRect(ML,y,3,ch,TEAL);setFont(9,'bold',NAVY);doc.text(d.name,ML+7,y+6);setFont(8,'normal',GREY);doc.text(d.type,ML+7,y+11);let ay=y+16;if(d.loc){setFont(8,'normal',TEAL);doc.text('Location: '+d.loc,ML+7,ay);ay+=5;}if(d.file_id){setFont(8,'normal',TEAL);doc.text('Attached: '+(d.filename||'File'),ML+7,ay);}y+=ch+4;});}
-  doc.addPage();y=MT;fillRect(0,0,W,14,NAVY);setFont(8,'normal',WHITE);doc.text('KINLIGHT  ·  ASSET REGISTER',ML,9);y=22;setFont(16,'bold',NAVY);doc.text('Asset Register',ML,y);y+=6;setFont(9,'normal',GREY);doc.text('All assets recorded by '+holderName+' at time of package generation.',ML,y);y+=12;
-  if(!S.assets.length){fillRect(ML,y,CW,16,LGREY);setFont(9,'italic',GREY);doc.text('No assets have been recorded.',ML+4,y+9);y+=22;}else{const cats=[...new Set(S.assets.map(a=>a.category))];cats.forEach(cat=>{const items=S.assets.filter(a=>a.category===cat);sectionHeader(cat);items.forEach(a=>{checkPage(32);fillRect(ML,y,CW,28,WHITE);doc.setDrawColor(...LGREY);doc.setLineWidth(0.3);doc.rect(ML,y,CW,28);fillRect(ML,y,3,28,NAVY);let ay=y+6;setFont(10,'bold',NAVY);doc.text(a.name,ML+7,ay);ay+=5;if(a.value){setFont(9,'bold',TEAL);doc.text('$'+Math.round(a.value).toLocaleString(),ML+7,ay);ay+=4.5;}if(a.details){setFont(8,'normal',GREY);const dl=wrap(a.details,CW-14);doc.text(dl.slice(0,2),ML+7,ay);ay+=dl.slice(0,2).length*4;}if(a.beneficiary){setFont(7.5,'bold',GREY);doc.text('BENEFICIARY: '+a.beneficiary,ML+7,y+25);}y+=32;});y+=4;});}
-  doc.addPage();y=MT;fillRect(0,0,W,14,NAVY);setFont(8,'normal',WHITE);doc.text('KINLIGHT  ·  MY WISHES',ML,9);y=22;setFont(16,'bold',NAVY);doc.text('My Wishes',ML,y);y+=6;setFont(9,'normal',GREY);doc.text('These are '+holderName+'\'s recorded wishes and final instructions.',ML,y);y+=12;
-  if(!S.wishes.length){fillRect(ML,y,CW,16,LGREY);setFont(9,'italic',GREY);doc.text('No wishes have been recorded.',ML+4,y+9);y+=22;}else{const priColor={high:RED,medium:GREY,low:TEAL};const wishCats=[...new Set(S.wishes.map(w=>w.category))];wishCats.forEach(cat=>{sectionHeader(cat);S.wishes.filter(w=>w.category===cat).forEach(w=>{checkPage(26);const pc=priColor[w.priority]||GREY;fillRect(ML,y,22,7,pc);setFont(6.5,'bold',WHITE);doc.text((w.priority||'medium').toUpperCase(),ML+2,y+4.8);setFont(10,'bold',NAVY);doc.text(w.title,ML+26,y+5);y+=10;if(w.details){setFont(8.5,'normal',GREY);const dl=wrap(w.details,CW);doc.text(dl,ML,y);y+=dl.length*4.5+3;}divider();});y+=4;});}
-  doc.addPage();y=MT;fillRect(0,0,W,14,NAVY);setFont(8,'normal',WHITE);doc.text('KINLIGHT  ·  KEY CONTACTS',ML,9);y=22;setFont(16,'bold',NAVY);doc.text('Key People to Contact',ML,y);y+=12;
-  if(!S.kin.length){fillRect(ML,y,CW,16,LGREY);setFont(9,'italic',GREY);doc.text('No contacts have been recorded.',ML+4,y+9);y+=22;}else{S.kin.forEach((contact,i)=>{checkPage(30);fillRect(ML,y,CW,26,i%2===0?WHITE:LGREY);doc.setDrawColor(...LGREY);doc.setLineWidth(0.3);doc.rect(ML,y,CW,26);doc.setFillColor(...NAVY);doc.circle(ML+10,y+13,7,'F');const initials=((contact.first[0]||'')+(contact.last?contact.last[0]:'')).toUpperCase();setFont(8,'bold',WHITE);doc.text(initials,ML+10,y+15.5,{align:'center'});setFont(10,'bold',NAVY);doc.text(contact.first+' '+contact.last,ML+22,y+8);setFont(8,'normal',GREY);doc.text(contact.rel||'Contact',ML+22,y+13);if(contact.email){setFont(8,'normal',TEAL);doc.text(contact.email,ML+22,y+18);}if(contact.phone){setFont(8,'normal',GREY);doc.text(contact.phone,ML+22,y+22);}y+=30;});}
-  const totalPages=doc.getNumberOfPages();for(let i=1;i<=totalPages;i++){doc.setPage(i);fillRect(0,H-12,W,12,NAVY);setFont(7,'normal',[184,176,160]);doc.text('Kinlight  ·  Prepared for '+k.first+' '+k.last+'  ·  Confidential',ML,H-5);doc.text('Page '+i+' of '+totalPages,W-MR,H-5,{align:'right'});}
-  const fname='Kinlight-'+k.first+'-'+k.last+'.pdf';doc.save(fname);log('Package previewed for '+k.first+' '+k.last);save();toast('Package downloaded ✓');
-}
-
 function render(){
   showExplainerIfNew();
 
