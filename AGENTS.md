@@ -9,7 +9,7 @@
 ## ✅ CHECKPOINT COMPLETE — F102 (File Upload via GridFS)
 
 > **Completed:** 30 July 2026
-> **Status:** Code complete (255 tests pass). GridFS stores encrypted files in existing Atlas cluster.
+> **Status:** Code complete (261 tests pass). GridFS stores encrypted files in existing Atlas cluster.
 
 ### What was built
 - **F102 (File Upload):** Pluggable storage backend (`identity-service/storage/`) with GridFS default — swap to S3 via `STORAGE_BACKEND` env var. AES-256-GCM encryption at rest. Endpoints: `POST /files/upload`, `GET /files/{id}`, `DELETE /files/{id}` with per-user ownership enforcement. Frontend file pickers in Will and suppDoc modals. jsPDF and ReportLab PDFs show attached filenames.

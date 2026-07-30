@@ -14,6 +14,7 @@ import os
 import logging
 import re as re_mod
 import secrets
+import threading
 import zipfile
 from xml.sax.saxutils import escape as xml_escape
 
@@ -424,11 +425,12 @@ def check_password(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode(), hashed.encode())
 
 
-def create_token(user_id: str) -> str:
+def create_token(user_id: str, user: Optional[dict] = None) -> str:
     payload = {
         "sub": user_id,
         "iat": now_utc(),
         "exp": now_utc() + timedelta(hours=JWT_EXPIRY_HOURS),
+        "tokenVersion": (user or {}).get("tokenVersion", 0),
     }
     return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
 
@@ -542,6 +544,12 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         user = users_col.find_one({"_id": ObjectId(payload["sub"])})
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
+        # F105: Validate token version against database — ensures tokens are
+        # invalidated on password reset (incrementing tokenVersion).
+        token_version = payload.get("tokenVersion", 0)
+        db_version = user.get("tokenVersion", 0)
+        if token_version != db_version:
+            raise HTTPException(status_code=401, detail="Invalid token")
         return user
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid token")
@@ -1271,15 +1279,11 @@ def login(request: Request, body: dict):
     username = body.get("username", "").strip().lower()
     password = body.get("password", "")
 
-    # F86: check lockout BEFORE verifying credentials
+    # F86 / F107: check lockout BEFORE verifying credentials.
+    # F107: Return 401 (not 429) to prevent username enumeration via status code.
     if username and is_account_locked(username):
-        remaining = get_lockout_remaining_seconds(username)
-        minutes_left = max(1, (remaining + 59) // 60)  # round up to nearest minute
-        logger.warning(f"Locked-out login attempt for username: {username} ({minutes_left} min remaining)")
-        raise HTTPException(
-            status_code=429,
-            detail=f"Too many failed attempts. Please try again in {minutes_left} minute{'s' if minutes_left != 1 else ''}.",
-        )
+        logger.warning(f"Locked-out login attempt for username: {username}")
+        raise HTTPException(status_code=401, detail="Invalid credentials")
 
     user = users_col.find_one({"username": username})
     if not user or not check_password(password, user.get("password", "")):
@@ -1295,7 +1299,7 @@ def login(request: Request, body: dict):
     clear_login_failures(username)
     logger.info(f"Successful login for username: {username}")
     users_col.update_one({"_id": user["_id"]}, {"$set": {"lastLogin": now_utc()}})
-    return {"ok": True, "token": create_token(str(user["_id"])), "user": clean_user(user)}
+    return {"ok": True, "token": create_token(str(user["_id"]), user), "user": clean_user(user)}
 
 
 @app.get("/auth/me")
@@ -1363,7 +1367,9 @@ def request_reset(request: Request, body: dict):
         "createdAt": now_utc(),
         "expiresAt": now_utc() + timedelta(minutes=RESET_TOKEN_TTL_MINUTES),
     })
-    send_reset_email(user, token)
+    # F108: Send email asynchronously so response time is constant regardless
+    # of whether the account exists. Prevents username enumeration via timing.
+    threading.Thread(target=send_reset_email, args=(user, token), daemon=True).start()
     return generic
 
 
@@ -1382,7 +1388,8 @@ def reset_password(body: dict):
 
     users_col.update_one(
         {"_id": reset_doc["userId"]},
-        {"$set": {"password": hash_password(new_password)}},
+        {"$set": {"password": hash_password(new_password)},
+         "$inc": {"tokenVersion": 1}},
     )
     resets_col.update_one({"_id": reset_doc["_id"]}, {"$set": {"used": True}})
     # F86: clear lockout so the user can log in immediately with their new password
@@ -1779,6 +1786,8 @@ def force_overdue(request: Request, body: dict = Body(...), current_user: dict =
     else:
         user_id = current_user["_id"]
 
+    logger.warning(f"Admin {current_user.get('username','')} force-overdue target={target_username or 'self'}")
+
     vaults_col.update_one(
         {"userId": user_id},
         {"$set": {
@@ -1811,6 +1820,8 @@ def force_reminder(request: Request, body: dict = Body(...), current_user: dict 
         user_id = target_user["_id"]
     else:
         user_id = current_user["_id"]
+
+    logger.warning(f"Admin {current_user.get('username','')} force-reminder target={target_username or 'self'}")
 
     vault_doc = vaults_col.find_one({"userId": user_id})
     interval = _interval_days(vault_doc) if vault_doc else 60
@@ -1845,6 +1856,8 @@ def force_warning(request: Request, body: dict = Body(...), current_user: dict =
         user_id = target_user["_id"]
     else:
         user_id = current_user["_id"]
+
+    logger.warning(f"Admin {current_user.get('username','')} force-warning target={target_username or 'self'}")
 
     vault_doc = vaults_col.find_one({"userId": user_id})
     interval = _interval_days(vault_doc) if vault_doc else 60
@@ -1889,6 +1902,63 @@ def _validate_filename(filename: str) -> bool:
     return False
 
 
+# File-type magic byte signatures (first bytes of each supported format).
+# Tuple: (bytes to match, description)
+_MAGIC_SIGNATURES = [
+    # PDF
+    (b"%PDF-", "PDF"),
+    # JPEG
+    (b"\xFF\xD8\xFF", "JPEG"),
+    # PNG
+    (b"\x89PNG\r\n\x1a\n", "PNG"),
+    # WebP — RIFF container with WEBP subtype at offset 8
+    # (check offset 8–11 only after confirming RIFF header)
+    # ZIP / Office Open XML (DOCX, XLSX) / generic ZIP
+    (b"PK\x03\x04", "ZIP/DOCX"),
+    # OLE Compound Document (old-format DOC, XLS)
+    (b"\xD0\xCF\x11\xE0", "DOC"),
+]
+
+
+def _validate_magic_bytes(data: bytes, claimed_type: str) -> bool:
+    """
+    Validate that the first bytes of the file match the claimed content type.
+    Uses hardcoded magic byte signatures — no external library dependency.
+
+    TXT files are always accepted (text has no reliable magic bytes).
+    """
+    if len(data) < 4:
+        return False  # too small to identify
+
+    if claimed_type == "text/plain":
+        return True  # text files have no reliable magic bytes
+
+    if claimed_type == "application/pdf":
+        return data[:5] == b"%PDF-"
+
+    if claimed_type in ("image/jpeg",):
+        return data[:3] == b"\xFF\xD8\xFF"
+
+    if claimed_type in ("image/png",):
+        return data[:8] == b"\x89PNG\r\n\x1a\n"
+
+    if claimed_type in ("image/webp",):
+        # WebP: RIFF header at 0–3, WEBP at 8–11
+        return (data[:4] == b"RIFF" and len(data) >= 12 and
+                data[8:12] == b"WEBP")
+
+    if claimed_type in ("application/msword",
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"):
+        # OLE compound (old .doc) or ZIP-based (.docx)
+        return (data[:4] == b"\xD0\xCF\x11\xE0" or  # OLE2
+                data[:4] == b"PK\x03\x04")            # ZIP-based Office Open XML
+
+    if claimed_type in ("application/zip",):
+        return data[:4] == b"PK\x03\x04"
+
+    return False
+
+
 @app.post("/files/upload")
 @limiter.limit("10/minute", key_func=get_user_or_ip)
 async def upload_file(
@@ -1919,6 +1989,18 @@ async def upload_file(
             detail="Unsupported file type. Allowed: PDF, JPEG, PNG, WebP, DOC, DOCX, TXT, ZIP.",
         )
 
+    # F104: Check Content-Length before reading entire file into memory
+    content_length = request.headers.get("Content-Length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_FILE_SIZE_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File too large. Maximum size is {MAX_FILE_SIZE_BYTES // (1024*1024)} MB.",
+                )
+        except ValueError:
+            pass  # non-integer Content-Length — let file.read() handle it
+
     file_data = await file.read()
     if len(file_data) == 0:
         raise HTTPException(status_code=400, detail="Empty file")
@@ -1926,6 +2008,14 @@ async def upload_file(
         raise HTTPException(
             status_code=413,
             detail=f"File too large. Maximum size is {MAX_FILE_SIZE_BYTES // (1024*1024)} MB.",
+        )
+
+    # F103: Validate magic bytes against claimed content type
+    if not _validate_magic_bytes(file_data, content_type):
+        raise HTTPException(
+            status_code=400,
+            detail="File content does not match its claimed type. "
+                   "The file header must match the selected format.",
         )
 
     encrypted_data = encrypt_bytes(file_data)

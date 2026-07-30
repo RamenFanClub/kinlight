@@ -1876,7 +1876,8 @@ class TestSecurityLogging:
                     "lockedUntil": datetime.now(timezone.utc) + timedelta(minutes=10),
                 }
                 r = client.post("/auth/login", json={"username": "lockeduser", "password": "whatever"})
-                assert r.status_code == 429
+                # F107: lockout now returns 401 (not 429) to prevent username enumeration
+                assert r.status_code == 401
                 warning_calls = [str(c) for c in mock_logger.warning.call_args_list]
                 assert any("lockeduser" in c for c in warning_calls)
         finally:
@@ -2411,7 +2412,8 @@ class TestFileUploadEndpoints:
              patch("main.users_col") as mock_users, \
              patch("main.VAULT_ENCRYPTION_KEY", "00" * 32):
             mock_users.find_one.return_value = self._user()
-            r = self._post_file("/files/upload")
+            r = self._post_file("/files/upload",
+                               file_content=b"%PDF-1.4\nfake pdf content for testing")
         assert r.status_code == 200
         data = r.json()
         assert data["ok"] is True
