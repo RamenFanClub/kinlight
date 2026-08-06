@@ -10,7 +10,7 @@ apscheduler==3.11.0
 reportlab==4.4.0
 requests==2.33.1
 PyJWT==2.13.0
-cryptography==49.0.0
+cryptography==50.0.0
 slowapi==0.1.10
 pywebpush==2.0.0
 python-multipart==0.0.32
