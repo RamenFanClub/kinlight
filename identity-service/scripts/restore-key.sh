@@ -59,7 +59,7 @@ fi
 if [[ "$MODE" == "asc" ]]; then
     if [[ -t 0 ]]; then
         echo -e "${BOLD}Decrypting backup…${NC}"
-        read -rsp "Enter your GPG passphrase: " PASSPHRASE
+        read -rsp "Enter your GPG passphrase: " PASSPHRASE < /dev/tty
         echo ""
     else
         # Non-interactive (pipe/CI): let GPG fail if passphrase is required

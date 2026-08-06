@@ -71,10 +71,11 @@ echo -e "You will now set a ${BOLD}passphrase${NC} to encrypt the key."
 echo "Choose something memorable — you will need it to restore."
 echo ""
 
-# Collect passphrase in bash (avoids GPG pinentry issue on headless VMs)
-read -rsp "Enter passphrase: " PASSPHRASE
+# Collect passphrase from terminal (avoids GPG pinentry issue on headless VMs).
+# /dev/tty bypasses any piped stdin so the prompt actually shows.
+read -rsp "Enter passphrase: " PASSPHRASE < /dev/tty
 echo ""
-read -rsp "Confirm passphrase: " PASSPHRASE_CONFIRM
+read -rsp "Confirm passphrase: " PASSPHRASE_CONFIRM < /dev/tty
 echo ""
 
 if [[ "$PASSPHRASE" != "$PASSPHRASE_CONFIRM" ]]; then
