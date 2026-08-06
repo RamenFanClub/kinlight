@@ -71,7 +71,25 @@ echo -e "You will now set a ${BOLD}passphrase${NC} to encrypt the key."
 echo "Choose something memorable — you will need it to restore."
 echo ""
 
-echo "$KEY" | gpg --symmetric --armor --cipher-algo AES256 --output "$ASC_FILE" --batch
+# Collect passphrase in bash (avoids GPG pinentry issue on headless VMs)
+read -rsp "Enter passphrase: " PASSPHRASE
+echo ""
+read -rsp "Confirm passphrase: " PASSPHRASE_CONFIRM
+echo ""
+
+if [[ "$PASSPHRASE" != "$PASSPHRASE_CONFIRM" ]]; then
+    echo -e "${RED}ERROR: Passphrases do not match.${NC}"
+    exit 1
+fi
+
+if [[ -z "$PASSPHRASE" ]]; then
+    echo -e "${RED}ERROR: Passphrase cannot be empty.${NC}"
+    exit 1
+fi
+
+# Feed key on stdin (fd 0), passphrase on fd 3 (no trailing newline)
+gpg --symmetric --armor --cipher-algo AES256 --output "$ASC_FILE" --batch \
+    --passphrase-fd 3 3< <(printf '%s' "$PASSPHRASE") <<<"$KEY"
 
 echo -e "${GREEN}✓${NC} Encrypted key saved to: ${BOLD}$ASC_FILE${NC}"
 echo ""

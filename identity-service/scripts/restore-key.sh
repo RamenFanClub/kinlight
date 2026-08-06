@@ -57,8 +57,21 @@ fi
 # ── decrypt / read ────────────────────────────────────────────────────────────
 
 if [[ "$MODE" == "asc" ]]; then
-    echo -e "${BOLD}Decrypting backup…${NC} (enter your GPG passphrase)"
-    KEY="$(gpg --decrypt --batch "$FILE" 2>/dev/null)"
+    if [[ -t 0 ]]; then
+        echo -e "${BOLD}Decrypting backup…${NC}"
+        read -rsp "Enter your GPG passphrase: " PASSPHRASE
+        echo ""
+    else
+        # Non-interactive (pipe/CI): let GPG fail if passphrase is required
+        PASSPHRASE=""
+    fi
+
+    if [[ -n "$PASSPHRASE" ]]; then
+        KEY="$(gpg --decrypt --batch --passphrase-fd 3 "$FILE" 2>/dev/null \
+            3< <(printf '%s' "$PASSPHRASE"))"
+    else
+        KEY="$(gpg --decrypt --batch "$FILE" 2>/dev/null)"
+    fi
 else
     echo -e "Reading raw backup from $FILE"
     # Extract the hex line from the formatted .txt (skip the header/separator lines)
