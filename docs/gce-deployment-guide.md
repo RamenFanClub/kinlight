@@ -571,3 +571,94 @@ docker run -d --restart=unless-stopped --name kinlight-app \
 | Network egress | 1 GB/month to most destinations | API JSON is tiny; PDFs via Resend are the only significant egress — ~200 KB × N contacts per overdue event | ✅ Comfortable |
 | Cloud Monitoring | Limited free metrics | Basic CPU/memory only | ✅ |
 | **Regions** | us-west1, us-central1, us-east1 only | us-west1 (Oregon) | ✅ |
+
+---
+
+## Encryption key backup & restore (F109)
+
+> **Critical.** Lose `VAULT_ENCRYPTION_KEY` and every vault in MongoDB becomes permanently unrecoverable. This section covers backing it up off-machine, testing the restore, and rotating the key.
+
+### Backup procedure
+
+Run on the GCE VM (the key lives in the Docker env):
+
+```bash
+☁️ GCE VM
+docker exec kinlight-app printenv VAULT_ENCRYPTION_KEY | bash ~/kinlight/identity-service/scripts/backup-key.sh --stdin
+```
+
+Or, if you're SSH'd in and the key is set in your shell env:
+
+```bash
+./identity-service/scripts/backup-key.sh
+```
+
+The script does two things:
+
+1. **Digital backup** — encrypts the key with `gpg --symmetric --cipher-algo AES256 --armor` using a passphrase you choose. Outputs `vault-key-<date>.asc`. Copy the entire contents of this file into your password manager as a secure note (e.g. "Kinlight — Vault Encryption Key").
+
+2. **Physical backup** — writes the RAW 64-char hex key to `vault-key-<date>.txt`. **Print this page, store it in a fireproof safe, then IMMEDIATELY delete the .txt file from disk.** Never leave the raw key on any internet-connected device. The safe is your encryption layer for this copy.
+
+> **Why two backups?** The password manager copy is day-to-day recovery (needs passphrase + password manager access). The physical copy is the ultimate fallback (bypasses all digital encryption — relies solely on physical security of the safe). If you forget the GPG passphrase and lose all digital access, the printed copy in your safe still recovers everything.
+
+### Restore test (verify your backup works)
+
+Immediately after backing up, verify the backup restores correctly:
+
+```bash
+☁️ GCE VM
+./identity-service/scripts/restore-key.sh --asc vault-key-<date>.asc --verify
+```
+
+This decrypts the `.asc` file (prompts for your GPG passphrase), extracts the key, and compares it against the live `VAULT_ENCRYPTION_KEY`. If it prints `✓ Backup VERIFIED`, you're good.
+
+Also visually inspect the printed physical copy — confirm the hex key on paper is readable and matches.
+
+### Emergency restore (recovering onto a fresh VM)
+
+If you lose the VM and need to restore from backup:
+
+```bash
+🖥️ Local machine (or fresh VM)
+
+# From digital backup (needs passphrase + password manager):
+./identity-service/scripts/restore-key.sh --asc vault-key-<date>.asc
+
+# From physical backup (no passphrase needed — just type the key):
+./identity-service/scripts/restore-key.sh --raw vault-key-<date>.txt
+```
+
+Copy the output to `VAULT_ENCRYPTION_KEY` in your `docker run` command and GitHub Secrets.
+
+### Key rotation
+
+Use when you want to change the encryption key (e.g. after a suspected exposure, or periodically). Must run on a machine with MongoDB access (the GCE VM, or locally with network access to Atlas).
+
+```bash
+# Dry run first — confirms old key works and lists what will change
+python3 identity-service/scripts/rotate-key.py \
+  --old-key "$OLD_KEY" \
+  --new-key "$NEW_KEY"
+
+# Rotate vault content only (skip GridFS files for speed)
+python3 identity-service/scripts/rotate-key.py \
+  --old-key "$OLD_KEY" \
+  --new-key "$NEW_KEY" \
+  --execute --skip-files
+
+# Full rotation (vaults + files)
+python3 identity-service/scripts/rotate-key.py \
+  --old-key "$OLD_KEY" \
+  --new-key "$NEW_KEY" \
+  --execute
+```
+
+After rotation completes:
+1. Update `VAULT_ENCRYPTION_KEY` to the new key in Docker env and GitHub Secrets
+2. Restart the server: `docker stop kinlight-app && docker rm kinlight-app && docker run ...`
+3. Run a fresh backup of the new key: `./scripts/backup-key.sh`
+4. Verify: `./scripts/restore-key.sh --asc vault-key-*.asc --verify`
+
+> **Idempotent** — the script sets `encryptionKeyVersion` on each rotated document. Re-runs skip already-migrated data. Safe to run multiple times.
+>
+> **Atomic per document** — each vault and file is updated individually. No half-rotated state. If the script is interrupted, re-run it.

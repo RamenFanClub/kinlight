@@ -185,4 +185,4 @@ Future: MongoDB CSFLE, key rotation, per-user keys. |
 - [ ] Write pytest test for plaintext-passthrough (migration scenario)
 - [ ] Write pytest test for tampered ciphertext detection
 - [ ] Update CLAUDE.md with F04 status and notes
-- [ ] Document key backup procedure
+- [x] Document key backup procedure (F109 — `identity-service/scripts/backup-key.sh`, `restore-key.sh`, `rotate-key.py`)
