@@ -179,17 +179,17 @@ html,body{min-height:100%;background:var(--s);font-family:var(--fb);color:var(--
 const API = () => document.getElementById('api-url').value.replace(/\/$/, '');
 
 const TESTERS = [
-  {id:'01',username:'tester_01'},
-  {id:'02',username:'tester_02'},
-  {id:'03',username:'tester_03'},
-  {id:'04',username:'tester_04'},
-  {id:'05',username:'tester_05'},
-  {id:'06',username:'tester_06'},
+  {id:'01',username:'tester_01',email:'buat.nonton8282+tester01@gmail.com'},
+  {id:'02',username:'tester_02',email:'buat.nonton8282+tester02@gmail.com'},
+  {id:'03',username:'tester_03',email:'buat.nonton8282+tester03@gmail.com'},
+  {id:'04',username:'tester_04',email:'buat.nonton8282+tester04@gmail.com'},
+  {id:'05',username:'tester_05',email:'buat.nonton8282+tester05@gmail.com'},
+  {id:'06',username:'tester_06',email:'buat.nonton8282+tester06@gmail.com'},
 ];
 
 // ─── WHAT GETS TESTED ────────────────────────────────────────────────────────
 // Each test is a function that returns {pass:bool, detail:string}
-// They receive: token (JWT), username, password
+// They receive: token (JWT), email, password
 
 const TEST_SUITE = [
 
@@ -207,13 +207,13 @@ const TEST_SUITE = [
   {
     id: 'login-valid',
     name: 'Login with valid credentials',
-    detail: 'Confirms the identity service accepts correct username + password',
-    run: async ({username, password}) => {
+    detail: 'Confirms the identity service accepts correct email + password',
+    run: async ({email, password}) => {
       if (!password) return { pass: false, detail: 'No password entered — skip', skipped: true };
       const res = await fetchWithTimeout(API() + '/auth/login', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({username, password})
+        body: JSON.stringify({email, password})
       }, 8000);
       if (!res.ok) throw new Error('Login failed with status ' + res.status + ' — wrong password?');
       const data = await res.json();
@@ -226,11 +226,11 @@ const TEST_SUITE = [
     id: 'login-invalid',
     name: 'Login with wrong password is rejected',
     detail: 'Confirms the backend correctly rejects bad credentials',
-    run: async ({username}) => {
+    run: async ({email}) => {
       const res = await fetchWithTimeout(API() + '/auth/login', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({username, password: 'definitely-wrong-password-xyz'})
+        body: JSON.stringify({email, password: 'definitely-wrong-password-xyz'})
       }, 8000);
       if (res.ok) throw new Error('Server accepted an incorrect password — security issue!');
       return { pass: true, detail: 'Correctly rejected with status ' + res.status };
@@ -241,15 +241,15 @@ const TEST_SUITE = [
     id: 'auth-me',
     name: 'Authenticated profile fetch works',
     detail: 'Checks that /auth/me returns the correct user when a valid token is sent',
-    run: async ({token, username}) => {
+    run: async ({token, email}) => {
       if (!token) return { pass: false, detail: 'No token — login test must pass first', skipped: true };
       const res = await fetchWithTimeout(API() + '/auth/me', {
         headers: {'Authorization': 'Bearer ' + token}
       }, 8000);
       if (!res.ok) throw new Error('/auth/me returned ' + res.status);
       const data = await res.json();
-      if (!data.username && !data.name) throw new Error('Response missing username/name field');
-      return { pass: true, detail: 'Profile returned for ' + (data.name || data.username) };
+      if (!data.email && !data.name) throw new Error('Response missing email/name field');
+      return { pass: true, detail: 'Profile returned for ' + (data.name || data.email) };
     }
   },
 
@@ -694,7 +694,7 @@ async function runAllTests() {
 
     let token = null;
     let testerPassed = 0, testerFailed = 0;
-    let ctx = { username: tester.username, password: pw, token: null };
+    let ctx = { email: tester.email, password: pw, token: null };
 
     for (const test of TESTER_TESTS) {
       setTestState(tester.id, test.id, 'run', 'Running…');

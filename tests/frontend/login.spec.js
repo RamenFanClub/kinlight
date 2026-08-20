@@ -18,25 +18,25 @@ test.describe('Login Flow', () => {
     await expect(subtitle).toHaveText('Sign in to your account.');
   });
 
-  test('empty username/password shows validation error', async ({ page }) => {
+  test('empty email/password shows validation error', async ({ page }) => {
     await page.click('.login-btn');
     const err = page.locator('#login-err');
     await expect(err).toBeVisible();
-    await expect(err).toHaveText('Please enter your username and password.');
+    await expect(err).toHaveText('Please enter your email and password.');
   });
 
   test('wrong credentials show error message', async ({ page }) => {
     await setupPage(page, { loginShouldFail: true });
-    await page.fill('#li-user', 'wrong_user');
+    await page.fill('#li-user', 'wrong@example.com');
     await page.fill('#li-pass', 'wrong_pass');
     await page.click('.login-btn');
     const err = page.locator('#login-err');
     await expect(err).toBeVisible();
-    await expect(err).toHaveText('Incorrect username or password.');
+    await expect(err).toHaveText('Incorrect email or password.');
   });
 
   test('successful login hides wall and shows greeting', async ({ page }) => {
-    await setupPage(page, { user: { name: 'Sarah Nguyen', username: 'tester_01' } });
+    await setupPage(page, { user: { name: 'Sarah Nguyen', email: 'sarah@example.com' } });
     await loginViaUI(page);
     await expect(page.locator('#login-wall')).toHaveClass(/hidden/);
     const greeting = page.locator('#user-greeting');
@@ -46,8 +46,8 @@ test.describe('Login Flow', () => {
   });
 
   test('Enter key submits login form', async ({ page }) => {
-    await setupPage(page, { user: { name: 'Test User', username: 'tester_01' } });
-    await page.fill('#li-user', 'tester_01');
+    await setupPage(page, { user: { name: 'Test User', email: 'tester_01@example.com' } });
+    await page.fill('#li-user', 'tester_01@example.com');
     await page.fill('#li-pass', 'Benny#07');
     await page.press('#li-pass', 'Enter');
     await page.waitForSelector('#login-wall', { state: 'hidden', timeout: 8000 });

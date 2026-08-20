@@ -391,6 +391,12 @@ class TestCleanUser:
         result = clean_user(self._user())
         assert result["isTester"] is True
 
+    def test_username_removed(self):
+        """F113: the legacy username field must not be exposed to the client."""
+        result = clean_user(self._user())
+        assert "username" not in result
+        assert result["email"] == "test@example.com"
+
 
 # ─── OVERDUE CALCULATION ──────────────────────────────────────────────────────
 
@@ -1174,11 +1180,11 @@ class TestJwtSecretValidation:
 class TestAccountLockout:
     """F86 — brute-force protection via account lockout after repeated failures."""
 
-    def _make_user(self, username="testuser", failed_count=0, locked_until=None):
+    def _make_user(self, email="testuser@example.com", failed_count=0, locked_until=None):
         """Create a fake user dict for testing."""
         user = {
             "_id": "fake_id_123",
-            "username": username,
+            "email": email,
             "password": hash_password("correct"),
             "failedLoginCount": failed_count,
         }
@@ -1193,7 +1199,7 @@ class TestAccountLockout:
         user = self._make_user()
         with patch("main.users_col") as mock_col:
             mock_col.find_one.return_value = user
-            assert is_account_locked("testuser") is False
+            assert is_account_locked("testuser@example.com") is False
 
     def test_not_locked_when_lockout_expired(self):
         """A user whose lockedUntil is in the past is not locked."""
@@ -1201,7 +1207,7 @@ class TestAccountLockout:
         user = self._make_user(locked_until=past)
         with patch("main.users_col") as mock_col:
             mock_col.find_one.return_value = user
-            assert is_account_locked("testuser") is False
+            assert is_account_locked("testuser@example.com") is False
 
     def test_locked_when_lockout_in_future(self):
         """A user whose lockedUntil is in the future IS locked."""
@@ -1209,13 +1215,21 @@ class TestAccountLockout:
         user = self._make_user(locked_until=future)
         with patch("main.users_col") as mock_col:
             mock_col.find_one.return_value = user
-            assert is_account_locked("testuser") is True
+            assert is_account_locked("testuser@example.com") is True
 
     def test_not_locked_for_unknown_user(self):
-        """Querying a non-existent username returns False (not locked)."""
+        """Querying a non-existent email returns False (not locked)."""
         with patch("main.users_col") as mock_col:
             mock_col.find_one.return_value = None
-            assert is_account_locked("ghost") is False
+            assert is_account_locked("ghost@example.com") is False
+
+    def test_lookup_uses_email_field(self):
+        """F113: lockout helpers must query by email, not the legacy username."""
+        user = self._make_user()
+        with patch("main.users_col") as mock_col:
+            mock_col.find_one.return_value = user
+            is_account_locked("testuser@example.com")
+            mock_col.find_one.assert_called_once_with({"email": "testuser@example.com"})
 
     # ── get_lockout_remaining_seconds ─────────────────────────────────────
 
@@ -1225,7 +1239,7 @@ class TestAccountLockout:
         user = self._make_user(locked_until=future)
         with patch("main.users_col") as mock_col:
             mock_col.find_one.return_value = user
-            remaining = get_lockout_remaining_seconds("testuser")
+            remaining = get_lockout_remaining_seconds("testuser@example.com")
             assert 500 <= remaining <= 600  # ~10 minutes
 
     def test_remaining_seconds_zero_when_expired(self):
@@ -1234,7 +1248,7 @@ class TestAccountLockout:
         user = self._make_user(locked_until=past)
         with patch("main.users_col") as mock_col:
             mock_col.find_one.return_value = user
-            assert get_lockout_remaining_seconds("testuser") == 0
+            assert get_lockout_remaining_seconds("testuser@example.com") == 0
 
     # ── record_failed_login ───────────────────────────────────────────────
 
@@ -1243,7 +1257,7 @@ class TestAccountLockout:
         user = self._make_user(failed_count=2)
         with patch("main.users_col") as mock_col:
             mock_col.find_one.return_value = user
-            record_failed_login("testuser")
+            record_failed_login("testuser@example.com")
             call_args = mock_col.update_one.call_args
             set_fields = call_args[0][1]["$set"]
             assert set_fields["failedLoginCount"] == 3
@@ -1254,7 +1268,7 @@ class TestAccountLockout:
         user = self._make_user(failed_count=MAX_LOGIN_ATTEMPTS - 1)
         with patch("main.users_col") as mock_col:
             mock_col.find_one.return_value = user
-            record_failed_login("testuser")
+            record_failed_login("testuser@example.com")
             call_args = mock_col.update_one.call_args
             set_fields = call_args[0][1]["$set"]
             assert set_fields["failedLoginCount"] == MAX_LOGIN_ATTEMPTS
@@ -1264,7 +1278,7 @@ class TestAccountLockout:
         """Recording a failure for a non-existent user does nothing."""
         with patch("main.users_col") as mock_col:
             mock_col.find_one.return_value = None
-            record_failed_login("ghost")  # should not raise
+            record_failed_login("ghost@example.com")  # should not raise
             mock_col.update_one.assert_not_called()
 
     # ── clear_login_failures ──────────────────────────────────────────────
@@ -1272,10 +1286,74 @@ class TestAccountLockout:
     def test_clears_count_and_lockout(self):
         """clear_login_failures resets the counter and removes lockedUntil."""
         with patch("main.users_col") as mock_col:
-            clear_login_failures("testuser")
+            clear_login_failures("testuser@example.com")
             call_args = mock_col.update_one.call_args
             assert call_args[0][1]["$set"]["failedLoginCount"] == 0
             assert "lockedUntil" in call_args[0][1]["$unset"]
+
+
+# ─── F113: EMAIL LOGIN ────────────────────────────────────────────────────────
+
+class TestEmailLogin:
+    """F113: login is keyed on the email field, normalized to lowercase."""
+
+    def _login(self, body):
+        main.limiter.enabled = False
+        try:
+            client = TestClient(main.app)
+            return client.post("/auth/login", json=body)
+        finally:
+            main.limiter.enabled = True
+
+    def test_login_by_email_succeeds(self):
+        """A correct email + password returns a token and a clean user."""
+        user = {
+            "_id": ObjectId(),
+            "email": "jane@example.com",
+            "name": "Jane",
+            "password": main.hash_password("Test1234!"),
+        }
+        with patch("main.users_col") as mock_users:
+            mock_users.find_one.return_value = user
+            mock_users.update_one.return_value = None
+            r = self._login({"email": "jane@example.com", "password": "Test1234!"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["ok"] is True
+        assert data["token"]
+        assert data["user"]["email"] == "jane@example.com"
+        assert "username" not in data["user"]
+
+    def test_login_normalizes_case_and_whitespace(self):
+        """Uppercase and surrounding whitespace are normalized to lowercase."""
+        user = {
+            "_id": ObjectId(),
+            "email": "jane@example.com",
+            "name": "Jane",
+            "password": main.hash_password("Test1234!"),
+        }
+        with patch("main.users_col") as mock_users:
+            mock_users.find_one.return_value = user
+            mock_users.update_one.return_value = None
+            r = self._login({"email": "  JANE@EXAMPLE.COM  ", "password": "Test1234!"})
+            # The lookup must use the lowercased email.
+            lookup = mock_users.find_one.call_args_list[0][0][0]
+            assert lookup == {"email": "jane@example.com"}
+        assert r.status_code == 200
+
+    def test_login_rejects_legacy_username_field(self):
+        """F113: a legacy `username` key in the body no longer authenticates."""
+        with patch("main.users_col") as mock_users:
+            mock_users.find_one.return_value = None
+            r = self._login({"username": "jane", "password": "Test1234!"})
+        assert r.status_code == 401
+
+    def test_missing_email_returns_401(self):
+        """An empty email cannot match any account."""
+        with patch("main.users_col") as mock_users:
+            mock_users.find_one.return_value = None
+            r = self._login({"email": "", "password": "whatever"})
+        assert r.status_code == 401
 
 
 # ─── F94: Security Response Headers ──────────────────────────────────────────
@@ -1640,7 +1718,7 @@ class TestLoginRateLimit:
              patch("main.is_account_locked", return_value=False):
             mock_users.find_one.return_value = None  # always "invalid credentials"
             statuses = [
-                client.post("/auth/login", json={"username": "nouser", "password": "wrong"}).status_code
+                client.post("/auth/login", json={"email": "nouser@example.com", "password": "wrong"}).status_code
                 for _ in range(6)
             ]
         assert statuses[:5] == [401] * 5
@@ -1654,13 +1732,13 @@ class TestLoginRateLimit:
             for _ in range(5):
                 client.post(
                     "/auth/login",
-                    json={"username": "nouser", "password": "wrong"},
+                    json={"email": "nouser@example.com", "password": "wrong"},
                     headers={"X-Forwarded-For": "1.1.1.1"},
                 )
             # A different IP should not be affected by IP 1.1.1.1's limit
             r = client.post(
                 "/auth/login",
-                json={"username": "nouser", "password": "wrong"},
+                json={"email": "nouser@example.com", "password": "wrong"},
                 headers={"X-Forwarded-For": "2.2.2.2"},
             )
         assert r.status_code == 401  # not 429 — separate bucket
@@ -1676,12 +1754,12 @@ class TestLoginRateLimit:
             for _ in range(5):
                 client.post(
                     "/auth/login",
-                    json={"username": "nouser", "password": "wrong"},
+                    json={"email": "nouser@example.com", "password": "wrong"},
                     headers={"X-Forwarded-For": "9.9.9.9"},
                 )
             r = client.post(
                 "/auth/login",
-                json={"username": "nouser", "password": "wrong"},
+                json={"email": "nouser@example.com", "password": "wrong"},
                 headers={"X-Forwarded-For": "8.8.8.8, 9.9.9.9"},  # leftmost = 8.8.8.8
             )
         assert r.status_code == 401  # 8.8.8.8 hasn't been limited yet
@@ -1697,7 +1775,7 @@ class TestPasswordResetRateLimit:
         with patch("main.users_col") as mock_users:
             mock_users.find_one.return_value = None  # generic response either way
             statuses = [
-                client.post("/auth/request-reset", json={"username": "anyone"}).status_code
+                client.post("/auth/request-reset", json={"email": "anyone@example.com"}).status_code
                 for _ in range(4)
             ]
         assert statuses[:3] == [200, 200, 200]
@@ -1832,16 +1910,16 @@ class TestSecurityLogging:
     """
 
     def test_failed_login_logs_warning(self):
-        """Failed login should produce a WARNING log entry with the username."""
+        """Failed login should produce a WARNING log entry with the masked email."""
         main.limiter.enabled = False
         try:
             client = TestClient(main.app)
             with patch("main.users_col") as mock_users, \
                  patch("main.logger") as mock_logger:
                 mock_users.find_one.return_value = None
-                client.post("/auth/login", json={"username": "baduser", "password": "wrong"})
+                client.post("/auth/login", json={"email": "baduser@example.com", "password": "wrong"})
                 warning_calls = [str(c) for c in mock_logger.warning.call_args_list]
-                assert any("baduser" in c for c in warning_calls)
+                assert any("b***@example.com" in c for c in warning_calls)
         finally:
             main.limiter.enabled = True
 
@@ -1853,13 +1931,13 @@ class TestSecurityLogging:
             with patch("main.users_col") as mock_users, \
                  patch("main.logger") as mock_logger:
                 mock_users.find_one.return_value = {
-                    "_id": ObjectId(), "username": "gooduser",
+                    "_id": ObjectId(), "email": "gooduser@example.com",
                     "password": main.hash_password("Test1234!"), "name": "Good User",
                 }
                 mock_users.update_one.return_value = None
-                client.post("/auth/login", json={"username": "gooduser", "password": "Test1234!"})
+                client.post("/auth/login", json={"email": "gooduser@example.com", "password": "Test1234!"})
                 info_calls = [str(c) for c in mock_logger.info.call_args_list]
-                assert any("gooduser" in c for c in info_calls)
+                assert any("g***@example.com" in c for c in info_calls)
         finally:
             main.limiter.enabled = True
 
@@ -1871,15 +1949,15 @@ class TestSecurityLogging:
             with patch("main.users_col") as mock_users, \
                  patch("main.logger") as mock_logger:
                 mock_users.find_one.return_value = {
-                    "_id": ObjectId(), "username": "lockeduser",
+                    "_id": ObjectId(), "email": "lockeduser@example.com",
                     "failedLoginCount": 5,
                     "lockedUntil": datetime.now(timezone.utc) + timedelta(minutes=10),
                 }
-                r = client.post("/auth/login", json={"username": "lockeduser", "password": "whatever"})
-                # F107: lockout now returns 401 (not 429) to prevent username enumeration
+                r = client.post("/auth/login", json={"email": "lockeduser@example.com", "password": "whatever"})
+                # F107: lockout now returns 401 (not 429) to prevent email enumeration
                 assert r.status_code == 401
                 warning_calls = [str(c) for c in mock_logger.warning.call_args_list]
-                assert any("lockeduser" in c for c in warning_calls)
+                assert any("l***@example.com" in c for c in warning_calls)
         finally:
             main.limiter.enabled = True
 
@@ -1892,7 +1970,7 @@ class TestSecurityLogging:
                  patch("main.logger") as mock_logger:
                 mock_users.find_one.return_value = None
                 secret_pw = "MyS3cretP@ss!"
-                client.post("/auth/login", json={"username": "testuser", "password": secret_pw})
+                client.post("/auth/login", json={"email": "testuser@example.com", "password": secret_pw})
                 all_calls = str(mock_logger.warning.call_args_list) + str(mock_logger.info.call_args_list)
                 assert secret_pw not in all_calls
         finally:
@@ -2101,7 +2179,7 @@ class TestAdminForceEndpoints:
     def _admin_user():
         return {
             "_id": TestAdminForceEndpoints.ADMIN_ID,
-            "username": "anggi",
+            "email": "anggi@example.com",
             "name": "Anggi",
             "isAdmin": True,
         }
@@ -2110,7 +2188,7 @@ class TestAdminForceEndpoints:
     def _target_user():
         return {
             "_id": TestAdminForceEndpoints.TARGET_ID,
-            "username": "tester_01",
+            "email": "tester01@example.com",
             "name": "Tester One",
         }
 
@@ -2141,11 +2219,11 @@ class TestAdminForceEndpoints:
     @staticmethod
     def _make_find_user(admin, target=None):
         """Return a mock side_effect for users_col.find_one that handles both
-        the _id lookup (get_current_user) and the username lookup (target)."""
+        the _id lookup (get_current_user) and the email lookup (target)."""
         def fn(query):
             if query.get("_id") == admin["_id"]:
                 return admin
-            if target and query.get("username") == target["username"]:
+            if target and query.get("email") == target["email"]:
                 return target
             return None
         return fn
@@ -2161,7 +2239,7 @@ class TestAdminForceEndpoints:
              patch("main.vaults_col") as mock_vaults:
             mock_users.find_one.side_effect = self._make_find_user(admin, target)
             mock_vaults.update_one.return_value = None
-            r = self._post("/admin/force-overdue", {"target": "tester_01"}, token)
+            r = self._post("/admin/force-overdue", {"target": "tester01@example.com"}, token)
         assert r.status_code == 200
         assert r.json()["ok"] is True
         call_args = mock_vaults.update_one.call_args
@@ -2187,14 +2265,14 @@ class TestAdminForceEndpoints:
         admin = self._admin_user()
         with patch("main.users_col") as mock_users:
             mock_users.find_one.side_effect = self._make_find_user(admin)
-            r = self._post("/admin/force-overdue", {"target": "nonexistent"}, token)
+            r = self._post("/admin/force-overdue", {"target": "nonexistent@example.com"}, token)
         assert r.status_code == 404
 
     def test_force_overdue_requires_admin(self):
         """Non-admin users cannot call force-overdue (with or without target)."""
         user_id = ObjectId("dddddddddddddddddddddddd")
         token = create_token(str(user_id))
-        user = {"_id": user_id, "username": "tester_01", "name": "Test"}
+        user = {"_id": user_id, "email": "tester_01@example.com", "name": "Test"}
         with patch("main.users_col") as mock_users:
             mock_users.find_one.return_value = user
             r = self._post("/admin/force-overdue", {}, token)
@@ -2213,7 +2291,7 @@ class TestAdminForceEndpoints:
             mock_users.find_one.side_effect = self._make_find_user(admin, target)
             mock_vaults.find_one.return_value = vault
             mock_vaults.update_one.return_value = None
-            r = self._post("/admin/force-reminder", {"target": "tester_01"}, token)
+            r = self._post("/admin/force-reminder", {"target": "tester01@example.com"}, token)
         assert r.status_code == 200
         assert r.json()["ok"] is True
         call_args = mock_vaults.update_one.call_args
@@ -2239,14 +2317,14 @@ class TestAdminForceEndpoints:
         admin = self._admin_user()
         with patch("main.users_col") as mock_users:
             mock_users.find_one.side_effect = self._make_find_user(admin)
-            r = self._post("/admin/force-reminder", {"target": "ghost_user"}, token)
+            r = self._post("/admin/force-reminder", {"target": "ghost@example.com"}, token)
         assert r.status_code == 404
 
     def test_force_reminder_requires_admin(self):
         """Non-admin blocked from force-reminder."""
         user_id = ObjectId("eeeeeeeeeeeeeeeeeeeeeeee")
         token = create_token(str(user_id))
-        user = {"_id": user_id, "username": "tester_02", "name": "Test"}
+        user = {"_id": user_id, "email": "tester_02@example.com", "name": "Test"}
         with patch("main.users_col") as mock_users:
             mock_users.find_one.return_value = user
             r = self._post("/admin/force-reminder", {}, token)
@@ -2265,7 +2343,7 @@ class TestAdminForceEndpoints:
             mock_users.find_one.side_effect = self._make_find_user(admin, target)
             mock_vaults.find_one.return_value = vault
             mock_vaults.update_one.return_value = None
-            r = self._post("/admin/force-warning", {"target": "tester_01"}, token)
+            r = self._post("/admin/force-warning", {"target": "tester01@example.com"}, token)
         assert r.status_code == 200
         assert r.json()["ok"] is True
         call_args = mock_vaults.update_one.call_args
@@ -2291,14 +2369,14 @@ class TestAdminForceEndpoints:
         admin = self._admin_user()
         with patch("main.users_col") as mock_users:
             mock_users.find_one.side_effect = self._make_find_user(admin)
-            r = self._post("/admin/force-warning", {"target": "nope"}, token)
+            r = self._post("/admin/force-warning", {"target": "nope@example.com"}, token)
         assert r.status_code == 404
 
     def test_force_warning_requires_admin(self):
         """Non-admin blocked from force-warning."""
         user_id = ObjectId("ffffffffffffffffffffffff")
         token = create_token(str(user_id))
-        user = {"_id": user_id, "username": "tester_03", "name": "Test"}
+        user = {"_id": user_id, "email": "tester_03@example.com", "name": "Test"}
         with patch("main.users_col") as mock_users:
             mock_users.find_one.return_value = user
             r = self._post("/admin/force-warning", {}, token)

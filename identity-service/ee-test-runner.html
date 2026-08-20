@@ -341,6 +341,16 @@ const PERSONAS = [
   },
 ];
 
+// F113: login is keyed on email now — see scripts/migrate_email_login.py.
+const ACCOUNT_EMAILS = {
+  tester_01: 'buat.nonton8282+tester01@gmail.com',
+  tester_02: 'buat.nonton8282+tester02@gmail.com',
+  tester_03: 'buat.nonton8282+tester03@gmail.com',
+  tester_04: 'buat.nonton8282+tester04@gmail.com',
+  tester_05: 'buat.nonton8282+tester05@gmail.com',
+  tester_06: 'buat.nonton8282+tester06@gmail.com',
+};
+
 // ─── TEST DEFINITIONS ────────────────────────────────────────────────────────
 // Each test: { id, name, fn(token, vault) → {pass, detail} }
 function buildTests(persona) {
@@ -351,7 +361,7 @@ function buildTests(persona) {
     id: `${acct}-auth`,
     name: 'F40 — Login with credentials',
     fn: async () => {
-      const res = await apiFetch('/auth/login', 'POST', { username: acct, password: PASSWORD });
+      const res = await apiFetch('/auth/login', 'POST', { email: ACCOUNT_EMAILS[acct] || acct, password: PASSWORD });
       if (!res.ok) return { pass: false, detail: `HTTP ${res.status}` };
       const data = await res.json();
       if (!data.token) return { pass: false, detail: 'No token in response' };
@@ -366,7 +376,7 @@ function buildTests(persona) {
       const res = await apiFetch('/auth/me', 'GET', null, token);
       if (!res.ok) return { pass: false, detail: `HTTP ${res.status}` };
       const data = await res.json();
-      return { pass: !!(data.user && data.user.username), detail: `User: ${data.user?.name || data.user?.username}` };
+      return { pass: !!(data.user && data.user.email), detail: `User: ${data.user?.name || data.user?.email}` };
     }
   });
 

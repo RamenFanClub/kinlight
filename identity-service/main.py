@@ -470,11 +470,11 @@ def is_password_acceptable(password: str) -> bool:
 
 # ─── F86: ACCOUNT LOCKOUT HELPERS ─────────────────────────────────────────────
 
-def is_account_locked(username: str) -> bool:
-    """Check if a username is currently locked out due to failed login attempts."""
+def is_account_locked(email: str) -> bool:
+    """Check if an email is currently locked out due to failed login attempts."""
     if users_col is None:
         return False
-    user = users_col.find_one({"username": username})
+    user = users_col.find_one({"email": email})
     if user is None:
         return False
     locked_until = user.get("lockedUntil")
@@ -483,11 +483,11 @@ def is_account_locked(username: str) -> bool:
     return now_utc() < locked_until
 
 
-def get_lockout_remaining_seconds(username: str) -> int:
+def get_lockout_remaining_seconds(email: str) -> int:
     """Return seconds remaining on lockout, or 0 if not locked."""
     if users_col is None:
         return 0
-    user = users_col.find_one({"username": username})
+    user = users_col.find_one({"email": email})
     if user is None:
         return 0
     locked_until = user.get("lockedUntil")
@@ -497,11 +497,11 @@ def get_lockout_remaining_seconds(username: str) -> int:
     return max(0, int(remaining))
 
 
-def record_failed_login(username: str) -> None:
+def record_failed_login(email: str) -> None:
     """Increment failed login counter; lock the account if threshold is reached."""
     if users_col is None:
         return
-    user = users_col.find_one({"username": username})
+    user = users_col.find_one({"email": email})
     if user is None:
         return
     new_count = user.get("failedLoginCount", 0) + 1
@@ -511,12 +511,12 @@ def record_failed_login(username: str) -> None:
     users_col.update_one({"_id": user["_id"]}, {"$set": update_fields})
 
 
-def clear_login_failures(username: str) -> None:
+def clear_login_failures(email: str) -> None:
     """Reset failed login counter and remove lockout. Called on successful login and password reset."""
     if users_col is None:
         return
     users_col.update_one(
-        {"username": username},
+        {"email": email},
         {"$set": {"failedLoginCount": 0}, "$unset": {"lockedUntil": ""}},
     )
 
@@ -525,7 +525,6 @@ def clean_user(user: dict) -> dict:
     """Strip sensitive fields before returning user data to the client."""
     return {
         "id":       str(user["_id"]),
-        "username": user.get("username", ""),
         "name":     user.get("name", ""),
         "email":    user.get("email", ""),
         "ageGroup": user.get("ageGroup", ""),
@@ -972,7 +971,7 @@ def send_reset_email(user: dict, token: str) -> bool:
     )
     sent = _send_email(user.get("email", ""), "Reset your Kinlight password", body)
     if sent:
-        logger.info(f"F66: Reset email sent to {user.get('username')}")
+        logger.info(f"F66: Reset email sent to {mask_email(user.get('email',''))}")
     return sent
 
 
@@ -1208,7 +1207,7 @@ def run_pulse_scan():
                     {"_id": vault_doc["_id"]},
                     {"$set": {"reminderSent": True, "updatedAt": now}},
                 )
-                logger.info(f"F60: reminderSent set for {user.get('username', user_id)}")
+                logger.info(f"F60: reminderSent set for {mask_email(user.get('email', str(user_id)))}")
 
     # F93: record heartbeat so /health can detect a silently-dead scanner
     if system_col is not None:
@@ -1238,6 +1237,10 @@ async def startup():
     # F66: fast token lookup + MongoDB auto-deletes expired reset records
     resets_col.create_index([("tokenHash", ASCENDING)])
     resets_col.create_index([("expiresAt", ASCENDING)], expireAfterSeconds=0)
+    # F113: email is the canonical login identifier — enforce uniqueness so two
+    # accounts can't share a login. Must run the email-migration script first
+    # (duplicate emails would make this index fail to build).
+    users_col.create_index([("email", ASCENDING)], unique=True)
     logger.info("Startup complete — indexes ensured")
 
 
@@ -1276,28 +1279,28 @@ def health():
 @app.post("/auth/login")
 @limiter.limit("5/minute")
 def login(request: Request, body: dict):
-    username = body.get("username", "").strip().lower()
+    email = body.get("email", "").strip().lower()
     password = body.get("password", "")
 
     # F86 / F107: check lockout BEFORE verifying credentials.
-    # F107: Return 401 (not 429) to prevent username enumeration via status code.
-    if username and is_account_locked(username):
-        logger.warning(f"Locked-out login attempt for username: {username}")
+    # F107: Return 401 (not 429) to prevent email enumeration via status code.
+    if email and is_account_locked(email):
+        logger.warning(f"Locked-out login attempt for email: {mask_email(email)}")
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    user = users_col.find_one({"username": username})
+    user = users_col.find_one({"email": email})
     if not user or not check_password(password, user.get("password", "")):
-        # F86: record the failure (only if the username actually exists — avoids
-        # creating lockout records for non-existent usernames, which would be a
+        # F86: record the failure (only if the email actually exists — avoids
+        # creating lockout records for non-existent emails, which would be a
         # resource-exhaustion vector)
-        if username:
-            record_failed_login(username)
-            logger.warning(f"Failed login attempt for username: {username}")
+        if email:
+            record_failed_login(email)
+            logger.warning(f"Failed login attempt for email: {mask_email(email)}")
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     # F86: successful login — clear any accumulated failures
-    clear_login_failures(username)
-    logger.info(f"Successful login for username: {username}")
+    clear_login_failures(email)
+    logger.info(f"Successful login for email: {mask_email(email)}")
     users_col.update_one({"_id": user["_id"]}, {"$set": {"lastLogin": now_utc()}})
     return {"ok": True, "token": create_token(str(user["_id"]), user), "user": clean_user(user)}
 
@@ -1340,16 +1343,16 @@ def update_me(body: dict, current_user: dict = Depends(get_current_user)):
 def request_reset(request: Request, body: dict):
     """
     F66: Start a password reset. ALWAYS returns the same generic response,
-    whether or not the username exists or has an email — so this endpoint
-    can't be used to probe which accounts exist.
+    whether or not the email exists — so this endpoint can't be used to
+    probe which accounts exist.
     """
-    username = body.get("username", "").strip().lower()
+    email = body.get("email", "").strip().lower()
     generic = {"ok": True, "message": "If that account exists and has an email on file, a reset link has been sent."}
 
-    if not username:
+    if not email:
         return generic
 
-    user = users_col.find_one({"username": username})
+    user = users_col.find_one({"email": email})
     if user is None or not user.get("email"):
         return generic
 
@@ -1368,7 +1371,7 @@ def request_reset(request: Request, body: dict):
         "expiresAt": now_utc() + timedelta(minutes=RESET_TOKEN_TTL_MINUTES),
     })
     # F108: Send email asynchronously so response time is constant regardless
-    # of whether the account exists. Prevents username enumeration via timing.
+    # of whether the account exists. Prevents email enumeration via timing.
     threading.Thread(target=send_reset_email, args=(user, token), daemon=True).start()
     return generic
 
@@ -1395,7 +1398,7 @@ def reset_password(body: dict):
     # F86: clear lockout so the user can log in immediately with their new password
     reset_user = users_col.find_one({"_id": reset_doc["userId"]})
     if reset_user is not None:
-        clear_login_failures(reset_user.get("username", ""))
+        clear_login_failures(reset_user.get("email", ""))
     return {"ok": True, "message": "Password updated. You can now sign in."}
 
 
@@ -1556,7 +1559,7 @@ def preview_package(
 
     logger.info(
         f"Preview package generated for {first} {last} "
-        f"({file_count} files) by user {current_user.get('username','')}"
+        f"({file_count} files) by user {mask_email(current_user.get('email',''))}"
     )
 
     from fastapi.responses import Response
@@ -1647,7 +1650,7 @@ To change what your contacts would receive, edit your vault content (assets, wis
     if not sent:
         raise HTTPException(status_code=500, detail="Failed to send test email. Check server logs.")
 
-    logger.info(f"Test notification sent to {holder_email} for user {current_user.get('username','')}")
+    logger.info(f"Test notification sent to {mask_email(holder_email)} for user {mask_email(current_user.get('email',''))}")
     return {"ok": True, "message": f"Test notification sent to {holder_email}"}
 
 
@@ -1777,16 +1780,16 @@ def force_overdue(request: Request, body: dict = Body(...), current_user: dict =
     """Set vault lastCheckin to 2020 to simulate an overdue state. For testing."""
     require_admin(current_user)
 
-    target_username = (body.get("target", "") or "").strip().lower()
-    if target_username:
-        target_user = users_col.find_one({"username": target_username})
+    target_email = (body.get("target", "") or "").strip().lower()
+    if target_email:
+        target_user = users_col.find_one({"email": target_email})
         if not target_user:
             raise HTTPException(status_code=404, detail="Target user not found")
         user_id = target_user["_id"]
     else:
         user_id = current_user["_id"]
 
-    logger.warning(f"Admin {current_user.get('username','')} force-overdue target={target_username or 'self'}")
+    logger.warning(f"Admin {mask_email(current_user.get('email',''))} force-overdue target={mask_email(target_email) or 'self'}")
 
     vaults_col.update_one(
         {"userId": user_id},
@@ -1812,16 +1815,16 @@ def force_reminder(request: Request, body: dict = Body(...), current_user: dict 
     """
     require_admin(current_user)
 
-    target_username = (body.get("target", "") or "").strip().lower()
-    if target_username:
-        target_user = users_col.find_one({"username": target_username})
+    target_email = (body.get("target", "") or "").strip().lower()
+    if target_email:
+        target_user = users_col.find_one({"email": target_email})
         if not target_user:
             raise HTTPException(status_code=404, detail="Target user not found")
         user_id = target_user["_id"]
     else:
         user_id = current_user["_id"]
 
-    logger.warning(f"Admin {current_user.get('username','')} force-reminder target={target_username or 'self'}")
+    logger.warning(f"Admin {mask_email(current_user.get('email',''))} force-reminder target={mask_email(target_email) or 'self'}")
 
     vault_doc = vaults_col.find_one({"userId": user_id})
     interval = _interval_days(vault_doc) if vault_doc else 60
@@ -1848,16 +1851,16 @@ def force_warning(request: Request, body: dict = Body(...), current_user: dict =
     """F64-2: Set vault to day 1 of overdue (just inside warning window). For testing."""
     require_admin(current_user)
 
-    target_username = (body.get("target", "") or "").strip().lower()
-    if target_username:
-        target_user = users_col.find_one({"username": target_username})
+    target_email = (body.get("target", "") or "").strip().lower()
+    if target_email:
+        target_user = users_col.find_one({"email": target_email})
         if not target_user:
             raise HTTPException(status_code=404, detail="Target user not found")
         user_id = target_user["_id"]
     else:
         user_id = current_user["_id"]
 
-    logger.warning(f"Admin {current_user.get('username','')} force-warning target={target_username or 'self'}")
+    logger.warning(f"Admin {mask_email(current_user.get('email',''))} force-warning target={mask_email(target_email) or 'self'}")
 
     vault_doc = vaults_col.find_one({"userId": user_id})
     interval = _interval_days(vault_doc) if vault_doc else 60

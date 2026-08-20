@@ -30,7 +30,7 @@ const API_BASE = 'https://api.kinlight.app';
 async function mockAPI(page, options = {}) {
   const {
     vault = null,
-    user = { name: 'Test User', username: 'tester_01' },
+    user = { name: 'Test User', email: 'tester_01@example.com' },
     loginShouldFail = false,
   } = options;
 
@@ -70,8 +70,8 @@ async function mockAPI(page, options = {}) {
 /**
  * Log in via the UI. Assumes mockAPI() has already been called.
  */
-async function loginViaUI(page, username = 'tester_01', password = 'Benny#07') {
-  await page.fill('#li-user', username);
+async function loginViaUI(page, email = 'tester_01@example.com', password = 'Benny#07') {
+  await page.fill('#li-user', email);
   await page.fill('#li-pass', password);
   await page.click('.login-btn');
   await page.waitForSelector('#login-wall', { state: 'hidden', timeout: 8000 });

@@ -82,7 +82,7 @@ test.describe('F62: Vault holder name in jsPDF cover', () => {
       vault: buildVault({
         kin: [{ id: 1, first: 'Jane', last: 'Doe', rel: 'Partner', email: 'jane@example.com', phone: '', notifyVia: 'email', order: 1, letter: '' }]
       }),
-      user: { name: 'Alex Smith', username: 'tester_01' }
+      user: { name: 'Alex Smith', email: 'alex@example.com' }
     });
     await loginViaUI(page);
 
