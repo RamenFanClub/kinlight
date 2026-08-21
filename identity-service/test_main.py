@@ -53,6 +53,13 @@ from main import (
     decrypt_bytes,
     send_notification_email,
     _download_and_decrypt,
+    create_trusted_token,
+    generate_trusted_link,
+    invalidate_trusted_links,
+    get_trusted_contact,
+    send_trusted_email,
+    _handle_trusted_notification,
+    TRUSTED_RESPONSE_HOURS,
 )
 
 
@@ -2911,3 +2918,181 @@ class TestPreviewPackage:
         assert r.status_code == 200
         assert r.headers["Content-Type"] == "application/zip"
 
+
+
+# ─── F115: TRUSTED PERSON (DELEGATED RESPONDER) ───────────────────────────────
+
+class TestTrustedToken:
+    """F115: scoped trusted JWT issuance + role enforcement."""
+
+    def test_trusted_token_has_role(self):
+        tok = create_trusted_token("user123")
+        payload = jwt.decode(tok, JWT_SECRET, algorithms=["HS256"])
+        assert payload["role"] == "trusted"
+        assert payload["sub"] == "user123"
+
+    def test_full_token_has_no_trusted_role(self):
+        tok = create_token("user123")
+        payload = jwt.decode(tok, JWT_SECRET, algorithms=["HS256"])
+        assert payload.get("role") != "trusted"
+
+
+class TestGetTrustedContact:
+    """F115: resolve the kin contact flagged isTrusted."""
+
+    def test_returns_trusted_contact(self):
+        doc = {"content": {"kin": [
+            {"id": 1, "first": "A", "email": "a@x.com"},
+            {"id": 2, "first": "B", "email": "b@x.com", "isTrusted": True},
+        ]}}
+        c = get_trusted_contact(doc)
+        assert c is not None
+        assert c["email"] == "b@x.com"
+
+    def test_none_when_no_trusted(self):
+        doc = {"content": {"kin": [{"id": 1, "first": "A", "email": "a@x.com"}]}}
+        assert get_trusted_contact(doc) is None
+
+    def test_none_when_no_kin(self):
+        assert get_trusted_contact({"content": {}}) is None
+
+    def test_none_when_no_content(self):
+        assert get_trusted_contact({}) is None
+
+
+class TestGenerateTrustedLink:
+    """F115: single-use magic link generation stores only a hash."""
+
+    def test_invalidates_prior_and_inserts_new(self):
+        insert_calls = []
+        with patch("main.trusted_links_col") as col:
+            col.insert_one = lambda doc: insert_calls.append(doc)
+            token = generate_trusted_link("user123")
+        assert token is not None
+        assert len(insert_calls) == 1
+        doc = insert_calls[0]
+        assert doc["used"] is False
+        assert doc["tokenHash"] != token
+        assert doc["tokenHash"] == hash_reset_token(token)
+
+    def test_invalidates_outstanding_links(self):
+        with patch("main.trusted_links_col") as col:
+            generate_trusted_link("user123")
+            col.update_many.assert_called_once_with(
+                {"userId": "user123", "used": False},
+                {"$set": {"used": True}},
+            )
+
+    def test_returns_none_when_no_collection(self):
+        with patch("main.trusted_links_col", None):
+            assert generate_trusted_link("user123") is None
+
+
+class TestSendTrustedEmail:
+    """F115: trusted-person email includes the magic link."""
+
+    def test_sends_email_with_link(self):
+        with patch("main._send_email", return_value=True) as mock_send:
+            ok = send_trusted_email({"first": "Jane", "email": "j@x.com"}, "Holder", "rawtoken")
+        assert ok is True
+        args, _ = mock_send.call_args
+        assert args[0] == "j@x.com"
+        assert "rawtoken" in args[2]
+
+    def test_returns_false_on_failure(self):
+        with patch("main._send_email", return_value=False):
+            assert send_trusted_email({"first": "J", "email": "j@x.com"}, "H", "t") is False
+
+
+class TestTrustedNotificationGate:
+    """F115: _handle_trusted_notification state machine."""
+
+    def _vault(self, trusted_notified_at=None, trusted_resolved=False, kin=None):
+        return {
+            "_id": "v1",
+            "trustedEnabled": True,
+            "trustedNotifiedAt": trusted_notified_at,
+            "trustedResolved": trusted_resolved,
+            "content": {"kin": kin or [
+                {"id": 1, "first": "Trusted", "email": "t@x.com", "isTrusted": True},
+                {"id": 2, "first": "Other", "email": "o@x.com"},
+            ]},
+        }
+
+    def _user(self):
+        return {"_id": "u1", "email": "holder@x.com", "name": "Holder"}
+
+    def _trusted(self):
+        return {"id": 1, "first": "Trusted", "email": "t@x.com", "isTrusted": True}
+
+    def test_not_yet_notified_sends_link_and_defers(self):
+        now = datetime.now(timezone.utc)
+        vault = self._vault()
+        with patch("main.generate_trusted_link", return_value="tok") as gl, \
+             patch("main.send_trusted_email", return_value=True) as se, \
+             patch("main.vaults_col") as col, \
+             patch("main.send_notification_email") as kin_send:
+            handled = _handle_trusted_notification(vault, self._user(), self._trusted(), "Holder", now, 5)
+        assert handled is True
+        se.assert_called_once()
+        kin_send.assert_not_called()
+        col.update_one.assert_called_once()
+        assert col.update_one.call_args[0][1]["$set"]["trustedNotifiedAt"] == now
+
+    def test_no_db_falls_through_to_normal_notify(self):
+        now = datetime.now(timezone.utc)
+        vault = self._vault()
+        with patch("main.generate_trusted_link", return_value=None):
+            handled = _handle_trusted_notification(vault, self._user(), self._trusted(), "Holder", now, 5)
+        assert handled is False
+
+    def test_within_window_defers(self):
+        now = datetime.now(timezone.utc)
+        vault = self._vault(trusted_notified_at=now - timedelta(hours=1))
+        with patch("main.send_notification_email") as kin_send:
+            handled = _handle_trusted_notification(vault, self._user(), self._trusted(), "Holder", now, 5)
+        assert handled is True
+        kin_send.assert_not_called()
+
+    def test_resolved_halts(self):
+        now = datetime.now(timezone.utc)
+        vault = self._vault(trusted_notified_at=now - timedelta(hours=100), trusted_resolved=True)
+        with patch("main.send_notification_email") as kin_send:
+            handled = _handle_trusted_notification(vault, self._user(), self._trusted(), "Holder", now, 5)
+        assert handled is True
+        kin_send.assert_not_called()
+
+    def test_window_expired_auto_releases_excluding_trusted(self):
+        now = datetime.now(timezone.utc)
+        vault = self._vault(trusted_notified_at=now - timedelta(hours=TRUSTED_RESPONSE_HOURS + 1))
+        with patch("main.send_notification_email", return_value=True) as kin_send, \
+             patch("main.send_contacts_notified_email") as holder_email, \
+             patch("main.send_push_to_user") as push, \
+             patch("main.vaults_col") as col:
+            handled = _handle_trusted_notification(vault, self._user(), self._trusted(), "Holder", now, 5)
+        assert handled is True
+        # only the non-trusted contact is notified
+        notified = [c for call in kin_send.call_args_list for c in call[0]]
+        emails = [c.get("email") for c in notified if isinstance(c, dict)]
+        assert "o@x.com" in emails
+        assert "t@x.com" not in emails
+        holder_email.assert_called_once()
+        push.assert_called_once()
+        assert col.update_one.call_args[0][1]["$set"]["overdueNotificationSent"] is True
+
+
+class TestTrustedFieldsRoundTrip:
+    """F115: trustedEnabled survives vault storage + reconstruction."""
+
+    def test_extract_includes_trusted_enabled(self):
+        fields = extract_vault_fields({"trustedEnabled": True})
+        assert fields["trustedEnabled"] is True
+
+    def test_extract_defaults_false(self):
+        fields = extract_vault_fields({})
+        assert fields["trustedEnabled"] is False
+
+    def test_reconstruct_includes_trusted_enabled(self):
+        doc = {"trustedEnabled": True, "content": {}}
+        blob = reconstruct_vault_blob(doc)
+        assert blob["trustedEnabled"] is True

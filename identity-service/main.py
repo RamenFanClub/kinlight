@@ -178,6 +178,7 @@ vaults_col = db["vaults"] if db is not None else None
 resets_col = db["password_resets"] if db is not None else None
 system_col = db["system"] if db is not None else None  # F93: single doc tracking pulse scanner health
 push_subs_col = db["push_subscriptions"] if db is not None else None  # F101: push notification subscriptions
+trusted_links_col = db["trusted_links"] if db is not None else None  # F115: single-use trusted-person magic links
 
 # F101: VAPID keypair for Web Push. Generated once and stored in env vars.
 # If not set, generate a new pair at startup and log it — copy to Railway env vars.
@@ -208,6 +209,13 @@ VAPID_CLAIMS = {"sub": "mailto:hello@kinlight.app"}
 RESET_TOKEN_TTL_MINUTES = 60
 JWT_EXPIRY_HOURS = 24
 MIN_PASSWORD_LENGTH = 8
+
+# F115: Trusted person — delegated responder
+# How long the trusted person has to act (after being notified) before kins are
+# auto-notified. Configurable via env var; defaults to 48 hours.
+TRUSTED_RESPONSE_HOURS = int(os.environ.get("TRUSTED_RESPONSE_HOURS", "48"))
+TRUSTED_LINK_TTL_MINUTES = 7 * 24 * 60  # magic-link email expiry (7 days, single-use)
+TRUSTED_JWT_EXPIRY_HOURS = 24           # scoped trusted JWT lifetime after redemption
 
 # F64-2: Warning days for ping_then_notify protocol
 # Warnings fire on these days of overdue; contacts notified on day 3+
@@ -375,6 +383,7 @@ def extract_vault_fields(vault_blob: dict) -> dict:
         "checkInUnit": vault_blob.get("fu", "months"),
         "gracePeriodDays": vault_blob.get("gp", 7),
         "notifyProto": vault_blob.get("notifyProto", "ping_then_notify"),
+        "trustedEnabled": vault_blob.get("trustedEnabled", False),
     }
 
 
@@ -410,6 +419,7 @@ def reconstruct_vault_blob(doc: dict) -> dict:
         "fu":          doc.get("checkInUnit", "months"),
         "gp":          doc.get("gracePeriodDays", 7),
         "notifyProto": doc.get("notifyProto", "ping_then_notify"),
+        "trustedEnabled": doc.get("trustedEnabled", False),
         "pushSubscribed": content.get("pushSubscribed", False),
         "log":         doc.get("log", []),
     }
@@ -433,6 +443,74 @@ def create_token(user_id: str, user: Optional[dict] = None) -> str:
         "tokenVersion": (user or {}).get("tokenVersion", 0),
     }
     return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+
+# ─── F115: TRUSTED PERSON TOKEN HELPERS ───────────────────────────────────────
+
+def create_trusted_token(user_id: str) -> str:
+    """Issue a scoped JWT for the trusted-person read-only view.
+    Decoupled from tokenVersion (the holder's password resets must not break an
+    active trusted link); instead it is short-lived and redeemable once."""
+    payload = {
+        "sub": user_id,
+        "role": "trusted",
+        "iat": now_utc(),
+        "exp": now_utc() + timedelta(hours=TRUSTED_JWT_EXPIRY_HOURS),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+
+def get_trusted_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    """Validate a trusted-person scoped JWT. Returns {"user", "vault"} on success.
+    Rejects full-access holder tokens (no role claim) and expired/forged tokens."""
+    if not credentials:
+        raise HTTPException(status_code=401, detail="Missing token")
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"], options={"require": ["exp", "sub"]})
+        if payload.get("role") != "trusted":
+            raise HTTPException(status_code=401, detail="Not a trusted access token")
+        user = users_col.find_one({"_id": ObjectId(payload["sub"])})
+        if not user:
+            raise HTTPException(status_code=401, detail="User not found")
+        vault_doc = vaults_col.find_one({"userId": user["_id"]})
+        if not vault_doc:
+            raise HTTPException(status_code=404, detail="Vault not found")
+        # Defense-in-depth: the trusted feature must still be enabled and the
+        # designated trusted contact must still exist on the vault.
+        if not vault_doc.get("trustedEnabled", False):
+            raise HTTPException(status_code=403, detail="Trusted access is disabled")
+        return {"user": user, "vault": vault_doc}
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
+def invalidate_trusted_links(user_id) -> None:
+    """Mark all outstanding trusted-person magic links for a user as used."""
+    if trusted_links_col is not None:
+        trusted_links_col.update_many(
+            {"userId": user_id, "used": False},
+            {"$set": {"used": True}},
+        )
+
+
+def generate_trusted_link(user_id) -> Optional[str]:
+    """F115: create a single-use trusted-person magic link.
+    Returns the raw token (emailed), or None if no DB is available."""
+    if trusted_links_col is None:
+        return None
+    invalidate_trusted_links(user_id)
+    token = secrets.token_urlsafe(32)
+    trusted_links_col.insert_one({
+        "userId":    user_id,
+        "tokenHash": hash_reset_token(token),
+        "used":      False,
+        "createdAt": now_utc(),
+        "expiresAt": now_utc() + timedelta(minutes=TRUSTED_LINK_TTL_MINUTES),
+    })
+    return token
 
 
 # ─── F66: PASSWORD RESET HELPERS ─────────────────────────────────────────────
@@ -635,6 +713,16 @@ def should_notify_contacts(vault_doc: dict, days_overdue: int) -> bool:
 
 
 # ─── NOTIFICATION QUEUE ───────────────────────────────────────────────────────
+
+def get_trusted_contact(vault_doc: dict) -> Optional[dict]:
+    """F115: return the kin contact flagged isTrusted, or None."""
+    content = decrypt_content(vault_doc.get("content"))
+    contacts = content.get("kin") or []
+    for c in contacts:
+        if c.get("isTrusted"):
+            return c
+    return None
+
 
 def get_contacts_to_notify(vault_doc: dict, days_overdue: int) -> list:
     """Return the slice of contacts to notify based on protocol and days overdue."""
@@ -956,6 +1044,35 @@ You received this because {holder_name} listed you as a trusted contact.
     return sent
 
 
+def send_trusted_email(contact: dict, holder_name: str, token: str) -> bool:
+    """F115: email the trusted person a single-use magic link to a read-only view."""
+    first = contact.get("first", "")
+    email = contact.get("email", "")
+    hours = int(TRUSTED_RESPONSE_HOURS)
+    link = f"{APP_URL}?trusted={token}"
+    body = f"""Dear {first},
+
+{holder_name} has not confirmed their check-in within the required period.
+
+You have been designated as {holder_name}'s trusted person in Kinlight. As their first responder, you can view their vault and stop any further notifications by using the secure link below.
+
+View {holder_name}'s vault and confirm you've checked on them:
+{link}
+
+This link is single-use and expires in 7 days. It gives you temporary, read-only access — you cannot change anything or control {holder_name}'s account.
+
+If you don't act within {hours} hours, {holder_name}'s other contacts will be notified automatically.
+
+If you believe this has been sent in error, please disregard this message.
+
+The Kinlight team
+"""
+    sent = _send_email(email, f"Kinlight: {holder_name} needs you to check in", body)
+    if sent:
+        logger.info(f"F115: Trusted email sent to {mask_email(email)}")
+    return sent
+
+
 def send_reset_email(user: dict, token: str) -> bool:
     """F66: email a single-use password reset link to the account holder."""
     first = (user.get("name") or "there").split(" ")[0]
@@ -1133,6 +1250,64 @@ def send_push_to_user(user_id, title: str, body: str, tag: str = "kinlight",
 
 # ─── PULSE SCANNER ────────────────────────────────────────────────────────────
 
+def _handle_trusted_notification(vault_doc: dict, user: dict, trusted: dict,
+                                 holder_name: str, now, days_overdue: int) -> bool:
+    """F115: trusted-person first-responder gate.
+
+    Called only when the vault is overdue, trustedEnabled is set, and a trusted
+    contact exists. Returns True when the trusted path handled (or deferred) the
+    notification, so the caller should skip the normal kin-notify block.
+
+    States:
+      * not yet notified  → send magic link, record trustedNotifiedAt, defer kins
+      * within window     → defer (waiting for trusted person to respond)
+      * resolved          → halt (trusted person already stopped notifications)
+      * window expired    → auto-release: notify remaining kins once
+    """
+    notified_at = vault_doc.get("trustedNotifiedAt")
+
+    if notified_at is None:
+        token = generate_trusted_link(user["_id"])
+        if token is None:
+            return False  # no DB available — fall through to normal kin notify
+        if send_trusted_email(trusted, holder_name, token):
+            vaults_col.update_one(
+                {"_id": vault_doc["_id"]},
+                {"$set": {"trustedNotifiedAt": now, "updatedAt": now}},
+            )
+            logger.info(f"F115: trusted person notified for {mask_email(user.get('email', str(user['_id'])))}")
+        return True
+
+    if vault_doc.get("trustedResolved", False):
+        return True  # halt — trusted person already stopped notifications
+
+    elapsed = now - ensure_utc(notified_at)
+    if elapsed < timedelta(hours=TRUSTED_RESPONSE_HOURS):
+        return True  # still within the response window — defer
+
+    # Auto-release: notify remaining kins once (exclude the trusted contact, who
+    # already received the magic link). Deliberately one-shot — not escalating —
+    # to avoid duplicate notifications on every scan.
+    contacts = get_contacts_to_notify(vault_doc, days_overdue)
+    trusted_email = trusted.get("email", "").strip().lower()
+    contacts = [c for c in contacts if c.get("email", "").strip().lower() != trusted_email]
+    sent_count = sum(
+        1 for c in contacts
+        if send_notification_email(c, vault_doc, holder_name)
+    )
+    if contacts:
+        send_contacts_notified_email(user, sent_count)
+        send_push_to_user(user["_id"], "Contacts have been notified",
+                          f"{sent_count} contact(s) received your vault package.",
+                          tag="kinlight-contacts-notified", require_interaction=True)
+        vaults_col.update_one(
+            {"_id": vault_doc["_id"]},
+            {"$set": {"overdueNotificationSent": True, "updatedAt": now}},
+        )
+    logger.info(f"F115: trusted-person auto-release — {sent_count} kin notified for {mask_email(user.get('email', str(user['_id'])))}")
+    return True
+
+
 def run_pulse_scan():
     """
     Hourly background job with three responsibilities:
@@ -1174,6 +1349,11 @@ def run_pulse_scan():
 
             # Notify contacts (day 3+ for ping_then_notify, immediately for others)
             if should_notify_contacts(vault_doc, days_overdue):
+                # F115: trusted person acts as first responder before kins are notified.
+                trusted = get_trusted_contact(vault_doc) if vault_doc.get("trustedEnabled", False) else None
+                if trusted and _handle_trusted_notification(vault_doc, user, trusted, holder_name, now, days_overdue):
+                    continue  # trusted path took over (sent link / waiting / resolved / auto-released)
+
                 already_notified = vault_doc.get("overdueNotificationSent", False)
                 if not already_notified or proto == "escalate":
                     contacts = get_contacts_to_notify(vault_doc, days_overdue)
@@ -1457,6 +1637,11 @@ def vault_sync(body: dict, current_user: dict = Depends(get_current_user)):
         },
         upsert=True,
     )
+
+    # F115: disabling the trusted feature invalidates any outstanding magic links.
+    if not vault_blob.get("trustedEnabled", False):
+        invalidate_trusted_links(current_user["_id"])
+
     return {"ok": True}
 
 
@@ -1671,10 +1856,14 @@ def checkin(current_user: dict = Depends(get_current_user)):
             "overdueNotificationSent":   False,
             "reminderSent":              False,
             "warningSentDays":           [],
+            "trustedResolved":           False,
             "updatedAt":                 now,
-        }},
+        },
+         "$unset": {"trustedNotifiedAt": ""}},
         upsert=True,
     )
+    # F115: checking in invalidates any outstanding trusted-person magic links.
+    invalidate_trusted_links(current_user["_id"])
 
     allclear_count = 0
     if was_overdue and existing:
@@ -1695,6 +1884,82 @@ def checkin(current_user: dict = Depends(get_current_user)):
         "allclear_sent":  allclear_count > 0,
         "allclear_count": allclear_count,
     }
+
+
+# ─── F115: TRUSTED PERSON API ─────────────────────────────────────────────────
+
+@app.post("/trusted/send-link")
+@limiter.limit("5/minute", key_func=get_user_or_ip)
+def trusted_send_link(request: Request, current_user: dict = Depends(get_current_user)):
+    """F115: manually generate + email the trusted-person magic link. Used by the
+    Settings "Test trusted link" button and for verification. The pulse scanner
+    generates the same link automatically when the vault becomes overdue."""
+    vault_doc = vaults_col.find_one({"userId": current_user["_id"]})
+    if not vault_doc:
+        raise HTTPException(status_code=400, detail="No vault found")
+    if not vault_doc.get("trustedEnabled", False):
+        raise HTTPException(status_code=400, detail="Trusted person is not enabled in Settings")
+    trusted = get_trusted_contact(vault_doc)
+    if not trusted:
+        raise HTTPException(status_code=400, detail="No trusted contact designated")
+    if not trusted.get("email"):
+        raise HTTPException(status_code=400, detail="Trusted contact has no email address")
+
+    token = generate_trusted_link(current_user["_id"])
+    if token is None:
+        raise HTTPException(status_code=500, detail="Trusted links unavailable")
+    holder_name = current_user.get("name", "the vault holder")
+    if not send_trusted_email(trusted, holder_name, token):
+        raise HTTPException(status_code=500, detail="Failed to send trusted email. Check server logs.")
+    logger.info(f"F115: manual trusted link sent for {mask_email(current_user.get('email',''))}")
+    return {"ok": True, "link": f"{APP_URL}?trusted={token}"}
+
+
+@app.get("/trusted/access")
+@limiter.limit("10/minute")
+def trusted_access(request: Request, token: str = ""):
+    """F115: redeem a single-use magic link, returning a scoped read-only JWT."""
+    if not token:
+        raise HTTPException(status_code=400, detail="Missing token")
+    link_doc = trusted_links_col.find_one({"tokenHash": hash_reset_token(token)}) if trusted_links_col is not None else None
+    if link_doc is None or link_doc.get("used", False):
+        raise HTTPException(status_code=400, detail="This link is invalid or has already been used.")
+    expires = link_doc.get("expiresAt")
+    if expires is None or ensure_utc(expires) <= now_utc():
+        raise HTTPException(status_code=400, detail="This link has expired. Please ask the vault holder for a new one.")
+
+    user = users_col.find_one({"_id": link_doc["userId"]})
+    if not user:
+        raise HTTPException(status_code=404, detail="Vault holder not found")
+    vault_doc = vaults_col.find_one({"userId": user["_id"]})
+    if not vault_doc or not vault_doc.get("trustedEnabled", False):
+        raise HTTPException(status_code=403, detail="Trusted access is no longer enabled for this vault.")
+
+    trusted_links_col.update_one({"_id": link_doc["_id"]}, {"$set": {"used": True}})
+    scoped = create_trusted_token(str(user["_id"]))
+    logger.info(f"F115: trusted link redeemed for {mask_email(user.get('email',''))}")
+    return {"ok": True, "token": scoped, "holderName": user.get("name", "")}
+
+
+@app.get("/trusted/vault")
+def trusted_vault(ctx: dict = Depends(get_trusted_user)):
+    """F115: read-only view of the vault for a trusted person."""
+    return {"ok": True, "vault": reconstruct_vault_blob(ctx["vault"])}
+
+
+@app.post("/trusted/resolve")
+@limiter.limit("5/minute")
+def trusted_resolve(request: Request, ctx: dict = Depends(get_trusted_user)):
+    """F115: trusted person confirms they've checked on the holder — halts any
+    further kin notifications without mutating the vault or account."""
+    vaults_col.update_one(
+        {"_id": ctx["vault"]["_id"]},
+        {"$set": {"trustedResolved": True, "updatedAt": now_utc()},
+         "$unset": {"trustedNotifiedAt": ""}},
+    )
+    invalidate_trusted_links(ctx["user"]["_id"])
+    logger.warning(f"F115: trusted person resolved (halted notifications) for {mask_email(ctx['user'].get('email',''))}")
+    return {"ok": True, "resolved": True}
 
 
 # ─── F101: PUSH NOTIFICATION API ───────────────────────────────────────────────

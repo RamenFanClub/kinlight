@@ -649,6 +649,13 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
           <div class="rd" id="rp-3"></div>
         </div>
              </div>
+      <div class="card"><div class="st" style="margin-bottom:14px;"><span class="m mf" style="font-size:17px;color:var(--sec);">verified_user</span>Trusted Person</div>
+        <div style="font-size:12px;color:var(--ov);margin-bottom:12px;line-height:1.5;">Designate one contact as your trusted person. If you miss a check-in, they're notified <strong>first</strong> and can view your vault and stop further notifications. If they don't respond within 48 hours, your other contacts are notified automatically.</div>
+        <button class="ob" id="trusted-toggle-btn" style="width:100%;justify-content:center;padding:12px;" onclick="toggleTrusted()"><span class="m" style="font-size:18px;">verified_user</span><span id="trusted-label">Enable trusted person</span></button>
+        <div id="trusted-status" style="font-size:11px;color:var(--ac);margin-top:8px;text-align:center;display:none;"></div>
+        <button class="ob" id="trusted-test-btn" style="width:100%;justify-content:center;padding:12px;margin-top:10px;display:none;" onclick="testTrustedLink()"><span class="m" style="font-size:18px;">send</span><span id="trusted-test-label">Send a test trusted link</span></button>
+        <div id="trusted-test-status" style="font-size:11px;color:var(--ac);margin-top:8px;text-align:center;display:none;"></div>
+      </div>
       <div class="card"><div class="st" style="margin-bottom:14px;"><span class="m" style="font-size:17px;color:var(--sec);">phone_android</span>Push Notifications</div>
         <div style="font-size:12px;color:var(--ov);margin-bottom:12px;line-height:1.5;">Get alerts on your phone when check-in is due or your contacts are notified. Works after adding Kinlight to your home screen.</div>
         <button class="ob" id="push-toggle-btn" style="width:100%;justify-content:center;padding:12px;" onclick="togglePush()"><span class="m" style="font-size:18px;">notifications</span><span id="push-label">Enable push notifications</span></button>
@@ -681,7 +688,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 
 <div id="sdm" class="mo"><div class="ms"><div class="mh"></div><div class="mt">Attach Document</div><div class="fi"><label>Document type</label><select id="sd-type"><option>Statement of Wishes</option><option>Enduring Power of Attorney</option><option>Advance Health Directive</option><option>Guardianship Nomination</option><option>Funeral Pre-arrangement</option><option>Business Succession Plan</option><option>Other</option></select></div><div class="fi"><label>Document name</label><input id="sd-name" type="text" placeholder="e.g. Statement of Wishes — 2024"/></div><div class="fi"><label>Where is this document stored?</label><input id="sd-loc" type="text" placeholder="e.g. Google Drive, home safe, solicitor"/></div><div class="fi"><label>Notes</label><textarea id="sd-notes" placeholder="Any additional context..."></textarea></div><div class="fi"><label>Attach a file (optional)</label><input type="file" id="sd-file-input" style="display:none;" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.txt,.zip"/><div id="sd-file-none" style="display:block;"><button type="button" class="ob" style="padding:6px 12px;font-size:11px;" onclick="$('sd-file-input').click()"><span class="m" style="font-size:13px;">attach_file</span>Choose file</button><span style="font-size:11px;color:var(--ov2);margin-left:8px;">PDF, JPG, PNG, DOC, TXT, ZIP (max 10 MB)</span></div><div id="sd-file-attached" style="display:none;align-items:center;gap:8px;background:var(--al);border-radius:8px;padding:8px 12px;"><span class="m" style="font-size:16px;color:var(--ac);">description</span><span id="sd-file-name" style="font-size:12px;font-weight:600;color:var(--p);"></span><button type="button" class="del-btn" onclick="detachSuppFile()"><span class="m">close</span></button></div></div><div class="mr"><button class="cxb" onclick="closeM()">Cancel</button><button class="cfb" onclick="saveSupp()">Save document</button></div></div></div>
 
-<div id="km" class="mo"><div class="ms"><div class="mh"></div><div class="mt" id="km-title">Add Contact</div><input type="hidden" id="km-edit-id" value=""/><div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;"><div class="fi"><label>First Name</label><input id="kf" type="text" placeholder="Jane"/></div><div class="fi"><label>Last Name</label><input id="kl" type="text" placeholder="Smith"/></div></div><div class="fi"><label>Relationship</label><input id="kr" type="text" placeholder="e.g. Spouse, Child, Solicitor"/></div><div class="fi"><label>Email</label><input id="ke" type="email" placeholder="jane@email.com"/></div><div class="fi"><label>Phone</label><input id="kp" type="tel" placeholder="+61 4xx xxx xxx"/></div><div class="fi"><label>Notify via</label><select id="k-notify"><option value="email">Email</option></select></div><div class="mr"><button class="cxb" onclick="closeM()">Cancel</button><button class="cfb" onclick="saveK()" id="km-save-btn">Add Contact</button></div></div></div>
+<div id="km" class="mo"><div class="ms"><div class="mh"></div><div class="mt" id="km-title">Add Contact</div><input type="hidden" id="km-edit-id" value=""/><div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;"><div class="fi"><label>First Name</label><input id="kf" type="text" placeholder="Jane"/></div><div class="fi"><label>Last Name</label><input id="kl" type="text" placeholder="Smith"/></div></div><div class="fi"><label>Relationship</label><input id="kr" type="text" placeholder="e.g. Spouse, Child, Solicitor"/></div><div class="fi"><label>Email</label><input id="ke" type="email" placeholder="jane@email.com"/></div><div class="fi"><label>Phone</label><input id="kp" type="tel" placeholder="+61 4xx xxx xxx"/></div><div class="fi"><label>Notify via</label><select id="k-notify"><option value="email">Email</option></select></div><label class="ktrusted-row" style="display:flex;align-items:center;gap:10px;margin:4px 0 14px;cursor:pointer;"><input type="checkbox" id="k-trusted" style="width:18px;height:18px;accent-color:var(--ac);" onclick="$('k-trusted-hint').style.display=this.checked?'':'none';"/><span style="font-size:13px;color:var(--p);font-weight:600;">Designate as trusted person</span><span class="m mf" style="font-size:18px;color:var(--sec);">verified_user</span></label><div id="k-trusted-hint" style="display:none;font-size:11px;color:var(--ov);margin:-6px 0 14px;">This person is notified first (instead of everyone) when a check-in is missed, and gets read-only access to your vault.</div><div class="mr"><button class="cxb" onclick="closeM()">Cancel</button><button class="cfb" onclick="saveK()" id="km-save-btn">Add Contact</button></div></div></div>
 
 <div id="lm" class="mo">
   <div class="ms">
@@ -739,6 +746,16 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
   </div>
 </div>
 
+<div id="trusted-view" style="position:fixed;inset:0;background:var(--s);z-index:1001;display:none;overflow-y:auto;">
+  <div style="max-width:430px;margin:0 auto;padding:24px 20px 48px;">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">
+      <div style="width:32px;height:32px;border-radius:8px;background:#22302b;display:flex;align-items:center;justify-content:center;"><svg width="20" height="20" viewBox="0 0 64 64" fill="none" aria-hidden="true"><path d="M26 16 Q32 9 38 16" fill="none" stroke="#5a7a6e" stroke-width="2.6" stroke-linecap="round"/><path d="M24 18 H40" stroke="#5a7a6e" stroke-width="2.6" stroke-linecap="round"/><path d="M23 20 Q23 18 25 18 H39 Q41 18 41 20 L43 46 Q43 50 39 50 H25 Q21 50 21 46 Z" fill="none" stroke="#5a7a6e" stroke-width="2.6" stroke-linejoin="round"/><ellipse cx="32" cy="36" rx="6.5" ry="9" fill="#e8a04b" opacity=".95"/><ellipse cx="32" cy="38" rx="3" ry="4.5" fill="#fff" opacity=".55"/></svg></div>
+      <span style="font-family:var(--fh);font-weight:800;font-size:20px;color:var(--p);">kin<span style="font-weight:800;">light</span></span>
+    </div>
+    <div id="tv-body"></div>
+  </div>
+</div>
+
 <div id="toast" class="toast"></div>
 
 <script>
@@ -774,6 +791,7 @@ const DEFAULT_STATE = {
   assets:[],wishes:[],kin:[],will:null,suppDocs:[],
   lastCheckin:null,fc:2,fu:'months',gp:7,
   v:'face',notifySeq:'in_order',notifyProto:'ping_then_notify',pushSubscribed:false,
+  trustedEnabled:false,
   log:[],saveCount:0
 };
 let S = {...DEFAULT_STATE};
@@ -889,6 +907,13 @@ document.addEventListener('DOMContentLoaded',async ()=>{
   ['li-user','li-pass'].forEach(id=>{
     $(id).addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();});
   });
+  // F115: arriving via a trusted-person magic link — redeem it, show read-only view
+  const qsTrusted=new URLSearchParams(location.search).get('trusted');
+  if(qsTrusted){
+    history.replaceState(null,'',location.pathname);
+    await openTrustedView(qsTrusted);
+    return;
+  }
   // F66: arriving via a reset link — capture token, scrub it from the URL, show reset form
   const qsToken=new URLSearchParams(location.search).get('reset');
   if(qsToken){
@@ -973,7 +998,7 @@ function go(s){
 function openM(id,cat){
   if(id==='am'){$('am-edit-id').value='';$('am-title').textContent='Record New Asset';$('am-save-btn').textContent='Save Asset';['an','av','adet','ab2','ano'].forEach(i=>$(i).value='');$('ac2').selectedIndex=0;}
   if(id==='wm'){$('wm-edit-id').value='';$('wm-title').textContent='Record a Wish';$('wm-save-btn').textContent='Save Wish';['wt','wd'].forEach(i=>$(i).value='');$('wp').value='medium';}
-  if(id==='km'){$('km-edit-id').value='';$('km-title').textContent='Add Contact';$('km-save-btn').textContent='Add Contact';['kf','kl','kr','ke','kp'].forEach(i=>$(i).value='');$('k-notify').value='email';}
+  if(id==='km'){$('km-edit-id').value='';$('km-title').textContent='Add Contact';$('km-save-btn').textContent='Add Contact';['kf','kl','kr','ke','kp'].forEach(i=>$(i).value='');$('k-notify').value='email';$('k-trusted').checked=false;$('k-trusted-hint').style.display='none';}
   if(id==='nqm')renderNQModal();
   if(cat&&id==='wm')$('wc2').value=cat;
   if(cat&&id==='sdm')$('sd-type').value=cat;
@@ -1072,6 +1097,215 @@ function adj(d){fCount=Math.max(1,Math.min(24,fCount+d));$('fc').textContent=fCo
 function adjGP(d){S.gp=Math.max(1,Math.min(30,(S.gp||7)+d));$('gp-val').textContent=S.gp;save();renderNextDueLine();toast('Grace period updated ✓');}
 function setV(v){S.v=v;$('rp2').className='rd on';save();toast('Verification updated ✓');}
 function setProto(p){S.notifyProto=p;save();toast('Protocol updated ✓');}
+
+// ─── F115: TRUSTED PERSON ─────────────────────────────────────────────────────
+function getTrustedContact(){return S.kin.find(k=>k.isTrusted)||null;}
+
+function toggleTrusted(){
+  S.trustedEnabled=!S.trustedEnabled;
+  if(!S.trustedEnabled){
+    const t=getTrustedContact();
+    if(t)toast('Trusted person disabled');
+  }
+  save();
+  renderTrustedToggle();
+  toast(S.trustedEnabled?'Trusted person enabled ✓':'Trusted person disabled');
+}
+
+function renderTrustedToggle(){
+  const btn=$('trusted-toggle-btn'),label=$('trusted-label'),status=$('trusted-status');
+  const testBtn=$('trusted-test-btn');
+  if(!btn||!label)return;
+  const t=getTrustedContact();
+  if(S.trustedEnabled){
+    btn.style.background='var(--al)';btn.style.color='var(--ac)';
+    label.textContent=t?('Trusted person: '+t.first+' '+(t.last||'')):'Trusted person enabled';
+    if(status){
+      status.style.display='block';
+      status.textContent=t
+        ?(t.first+' will be notified first, then everyone else after 48 hours.')
+        :'No trusted contact chosen yet — designate one in Contacts.';
+      status.style.color=t?'var(--ac)':'var(--am)';
+    }
+  }else{
+    btn.style.background='';btn.style.color='';
+    label.textContent='Enable trusted person';
+    if(status){status.style.display='none';}
+  }
+  if(testBtn){
+    testBtn.style.display=(S.trustedEnabled&&t)?'flex':'none';
+  }
+}
+
+async function testTrustedLink(){
+  const t=getTrustedContact();
+  if(!S.trustedEnabled||!t){toast('Enable trusted person and choose a contact first');return;}
+  const status=$('trusted-test-status');
+  try{
+    const res=await fetch(API+'/trusted/send-link',{method:'POST',headers:{...authHeader(),'Content-Type':'application/json'}});
+    if(!res.ok){const d=await res.json().catch(()=>({}));toast(d.detail||'Could not send test link');return;}
+    const data=await res.json();
+    if(status){status.style.display='block';status.textContent='Test link sent to '+t.email;status.style.color='var(--ac)';}
+    toast('Test trusted link sent to '+t.first+' ✓');
+  }catch(e){toast('Connection error — please try again');}
+}
+
+// ─── F115: TRUSTED READ-ONLY VIEW ─────────────────────────────────────────────
+const trustedAuthHeader = () => {
+  const t = sessionStorage.getItem('ee_trusted_token');
+  return t ? {'Authorization':'Bearer '+t} : {};
+};
+
+async function openTrustedView(rawToken){
+  const view=$('trusted-view');
+  const body=$('tv-body');
+  const showError=(msg)=>{
+    $('login-wall').classList.add('hidden');
+    if(view)view.style.display='block';
+    if(body)body.innerHTML='<div style="max-width:430px;margin:0 auto;padding:24px 20px;text-align:center;">'+
+      '<div style="font-size:40px;margin-bottom:12px;">⚠️</div>'+
+      '<div style="font-family:var(--fh);font-size:18px;font-weight:800;color:var(--p);margin-bottom:8px;">This link isn\u2019t available</div>'+
+      '<p style="font-size:13px;color:var(--ov);line-height:1.5;">'+esc(msg)+'</p></div>';
+  };
+  try{
+    const res=await fetch(API+'/trusted/access?token='+encodeURIComponent(rawToken));
+    if(!res.ok){const d=await res.json().catch(()=>({}));showError(d.detail||'This link is invalid or has expired.');return;}
+    const data=await res.json();
+    sessionStorage.setItem('ee_trusted_token',data.token);
+    sessionStorage.setItem('ee_trusted_holder',data.holderName||'');
+    const vres=await fetch(API+'/trusted/vault',{headers:trustedAuthHeader()});
+    if(!vres.ok){showError('Could not load the vault. The link may have expired.');return;}
+    const vdata=await vres.json();
+    $('login-wall').classList.add('hidden');
+    if(view)view.style.display='block';
+    renderTrustedView(vdata.vault||{},data.holderName||'');
+  }catch(e){showError('Connection error — please try again.');}
+}
+
+function _tvSection(icon,title,inner){
+  return '<div class="card" style="margin-bottom:14px;"><div class="st" style="margin-bottom:12px;"><span class="m mf" style="font-size:17px;color:var(--sec);">'+icon+'</span>'+esc(title)+'</div>'+inner+'</div>';
+}
+function _tvRow(label,value){
+  if(value===null||value===undefined||value==='')return '';
+  return '<div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:8px;font-size:13px;"><span style="color:var(--ov);flex-shrink:0;">'+esc(label)+'</span><span style="color:var(--p);font-weight:600;text-align:right;overflow-wrap:anywhere;">'+esc(value)+'</span></div>';
+}
+function _tvBlock(text){
+  if(!text)return '';
+  return '<div style="background:var(--w);border-radius:10px;padding:12px;font-size:13px;color:var(--p);line-height:1.6;margin-bottom:8px;white-space:pre-wrap;overflow-wrap:anywhere;">'+esc(text)+'</div>';
+}
+
+function renderTrustedView(vault,holderName){
+  const body=$('tv-body');
+  if(!body)return;
+  const firstName=(holderName||'your contact').split(' ')[0];
+  const assets=vault.assets||[];
+  const wishes=vault.wishes||[];
+  const will=vault.will||null;
+  const suppDocs=vault.suppDocs||[];
+  const kin=vault.kin||[];
+
+  const meLetter=(kin.find(k=>k.isTrusted)||{}).letter||'';
+
+  let html='';
+
+  // Banner
+  html+='<div style="background:var(--al);border:1px solid var(--ab);border-radius:16px;padding:18px;margin-bottom:16px;">'+
+    '<div style="display:flex;gap:12px;align-items:flex-start;">'+
+    '<div style="width:44px;height:44px;border-radius:12px;background:rgba(90,122,110,.12);display:flex;align-items:center;justify-content:center;flex-shrink:0;"><span class="m mf" style="font-size:22px;color:var(--ac);">verified_user</span></div>'+
+    '<div style="flex:1;">'+
+    '<div style="font-family:var(--fh);font-size:16px;font-weight:800;color:var(--p);line-height:1.3;">'+esc(firstName)+' hasn\u2019t checked in.</div>'+
+    '<p style="font-size:13px;color:var(--ov);line-height:1.5;margin-top:6px;">You\u2019ve been named their trusted person. Please review their vault below and, when you\u2019ve confirmed they\u2019re okay (or you\u2019re handling things), stop the notifications.</p>'+
+    '</div></div></div>';
+
+  // Personal letter (trusted person's own)
+  if(meLetter){
+    html+='<div class="card" style="margin-bottom:14px;background:rgba(90,122,110,.05);border:1px solid var(--ab);">'+
+      '<div class="st" style="margin-bottom:12px;"><span class="m mf" style="font-size:17px;color:var(--ac);">favorite</span>A personal message for you</div>'+
+      '<div style="background:var(--w);border-radius:10px;padding:14px;font-size:14px;color:var(--p);line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere;">'+esc(meLetter)+'</div></div>';
+  }
+
+  // Assets
+  if(assets.length){
+    const items=assets.map(a=>
+      '<div style="background:var(--w);border-radius:12px;padding:12px 14px;margin-bottom:8px;">'+
+        '<div style="font-weight:700;font-size:14px;color:var(--p);">'+esc(a.name)+'</div>'+
+        '<div style="font-size:11px;color:var(--sec);margin-top:2px;">'+esc(a.category||'Asset')+(a.value?(' · $'+Math.round(a.value).toLocaleString()):'')+'</div>'+
+        (a.details?_tvBlock(a.details):'')+
+        (a.beneficiary?_tvRow('Beneficiary',a.beneficiary):'')+
+      '</div>'
+    ).join('');
+    html+=_tvSection('account_balance','Assets ('+assets.length+')',items);
+  }
+
+  // Wishes
+  if(wishes.length){
+    const items=wishes.map(w=>
+      '<div style="background:var(--w);border-radius:12px;padding:12px 14px;margin-bottom:8px;">'+
+        '<div style="font-weight:700;font-size:14px;color:var(--p);">'+esc(w.title)+'</div>'+
+        '<div style="font-size:11px;color:var(--sec);margin-top:2px;">'+esc(w.category||'Wish')+'</div>'+
+        (w.details?_tvBlock(w.details):'')+
+      '</div>'
+    ).join('');
+    html+=_tvSection('auto_stories','Wishes ('+wishes.length+')',items);
+  }
+
+  // Will & documents
+  const willInner=(will&&Object.keys(will).length)
+    ?('<div style="background:var(--w);border-radius:12px;padding:12px 14px;">'+
+        _tvRow('Status',will.status)+
+        _tvRow('Date',will.date)+
+        _tvRow('Solicitor',will.solicitor)+
+        _tvRow('Stored at',will.loc1)+
+        _tvRow('Also stored at',will.loc2)+
+        _tvRow('Attached file',will.filename)+
+        _tvBlock(will.notes)+
+      '</div>')
+    :'<div style="font-size:13px;color:var(--ov);">No Will details recorded.</div>';
+  let docHtml=willInner;
+  if(suppDocs.length){
+    docHtml+=suppDocs.map(d=>
+      '<div style="background:var(--w);border-radius:12px;padding:12px 14px;margin-top:8px;">'+
+        '<div style="font-weight:700;font-size:14px;color:var(--p);">'+esc(d.name)+'</div>'+
+        '<div style="font-size:11px;color:var(--sec);margin-top:2px;">'+esc(d.type||'Document')+'</div>'+
+        _tvRow('Stored at',d.loc)+
+        _tvRow('Attached file',d.filename)+
+        _tvBlock(d.notes)+
+      '</div>'
+    ).join('');
+  }
+  html+=_tvSection('gavel','Will & Legal Documents',docHtml);
+
+  // Contacts
+  if(kin.length){
+    const items=kin.map(k=>
+      '<div style="display:flex;align-items:center;gap:10px;background:var(--w);border-radius:12px;padding:10px 14px;margin-bottom:8px;">'+
+        '<div class="ka" style="width:34px;height:34px;font-size:13px;">'+initials(k)+'</div>'+
+        '<div style="flex:1;min-width:0;"><div style="font-weight:700;font-size:13px;color:var(--p);">'+esc(k.first)+' '+esc(k.last||'')+'</div>'+
+        '<div style="font-size:11px;color:var(--ov);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(k.rel||'Contact')+(k.isTrusted?' · Trusted person':'')+'</div></div>'+
+      '</div>'
+    ).join('');
+    html+=_tvSection('group','Contacts ('+kin.length+')',items);
+  }
+
+  // Stop notifications
+  html+='<div style="margin:4px 0 20px;">'+
+    '<button id="tv-resolve-btn" class="login-btn" style="background:var(--ac);" onclick="trustedResolve()">'+
+    '<span class="m mf" style="font-size:18px;vertical-align:-4px;margin-right:6px;">task_alt</span>I\u2019ve checked on '+esc(firstName)+' \u2014 stop notifications</button>'+
+    '<div id="tv-resolve-status" style="font-size:13px;color:var(--ac);text-align:center;margin-top:12px;display:none;font-weight:600;"></div>'+
+  '</div>';
+
+  body.innerHTML=html;
+}
+
+async function trustedResolve(){
+  const status=$('tv-resolve-status');
+  try{
+    const res=await fetch(API+'/trusted/resolve',{method:'POST',headers:trustedAuthHeader()});
+    if(!res.ok){const d=await res.json().catch(()=>({}));if(status){status.style.display='block';status.style.color='var(--er)';status.textContent=d.detail||'Could not stop notifications.';}return;}
+    if(status){status.style.display='block';status.textContent='Notifications stopped. No further contacts will be notified.';}
+    const btn=$('tv-resolve-btn');if(btn){btn.style.display='none';}
+  }catch(e){if(status){status.style.display='block';status.style.color='var(--er)';status.textContent='Connection error — please try again.';}}
+}
 
 // ─── F08: VAULT EXPORT ───────────────────────────────────────────────────────
 function exportVault(){
@@ -1249,7 +1483,8 @@ function saveK(){
   if(!e){toast('Please enter an email address — it\'s needed to reach this contact');return;}
   if(!emailValid){toast('Please enter a valid email address');return;}
   const editId=$('km-edit-id').value;
-  const data={first:f,last:$('kl').value.trim(),rel:$('kr').value,email:e,phone:$('kp').value,notifyVia:$('k-notify').value};
+  const isTrusted=$('k-trusted').checked;
+  const data={first:f,last:$('kl').value.trim(),rel:$('kr').value,email:e,phone:$('kp').value,notifyVia:$('k-notify').value,isTrusted};
   let shouldNominate=false;
   if(editId){
     const idx=S.kin.findIndex(k=>k.id===parseInt(editId));
@@ -1264,7 +1499,9 @@ function saveK(){
     log('Contact added: '+f);
     shouldNominate=true;
   }
-  closeM();['kf','kl','kr','ke','kp'].forEach(i=>$(i).value='');$('km-edit-id').value='';
+  // F115: enforce a single trusted contact — clear the flag on everyone else.
+  if(isTrusted)S.kin.forEach(k=>{if(k.id!==parseInt(editId||'0'))k.isTrusted=false;});
+  closeM();['kf','kl','kr','ke','kp'].forEach(i=>$(i).value='');$('km-edit-id').value='';$('k-trusted').checked=false;
   save();toast(warmToast(editId?'Contact updated':'Contact added'));
   if(shouldNominate)nominateContact(e,f);
 }
@@ -1283,6 +1520,7 @@ function editK(id){
   const k=S.kin.find(x=>x.id===id);if(!k)return;
   $('km-edit-id').value=id;$('kf').value=k.first;$('kl').value=k.last||'';
   $('kr').value=k.rel||'';$('ke').value=k.email||'';$('kp').value=k.phone||'';$('k-notify').value=k.notifyVia||'email';
+  $('k-trusted').checked=!!k.isTrusted;$('k-trusted-hint').style.display=k.isTrusted?'':'none';
   $('km-title').textContent='Edit Contact';$('km-save-btn').textContent='Update Contact';$('km').classList.add('on');
 }
 
@@ -1665,6 +1903,7 @@ function render(){
           </div>
           ${letterPill}
         </div>
+        ${k.isTrusted?`<div style="display:flex;align-items:center;gap:4px;margin-bottom:6px;background:var(--sl);border-radius:8px;padding:5px 10px;width:fit-content;"><span class="m mf" style="font-size:14px;color:var(--ac);">verified_user</span><span style="font-size:11px;font-weight:700;color:var(--ac);">Trusted person — notified first</span></div>`:''}
         <div style="display:flex;align-items:center;gap:4px;margin-bottom:4px;">
           <span class="m" style="font-size:14px;color:var(--sec);">${NOTIFY_ICONS[k.notifyVia]||'email'}</span>
           <span style="font-size:11px;color:var(--ov);">Notify via ${NOTIFY_LABELS[k.notifyVia]||'Email'}</span>
@@ -1708,6 +1947,7 @@ function render(){
   $('rp-1').className='rd'+(S.notifyProto==='ping_then_notify'?' on':'');
   $('rp-2').className='rd'+(S.notifyProto==='notify_immediately'?' on':'');
   $('rp-3').className='rd'+(S.notifyProto==='escalate'?' on':'');
+  renderTrustedToggle();
   renderPushToggle();
 }
 
