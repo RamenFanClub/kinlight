@@ -2014,7 +2014,8 @@ class TestUpdateAccount:
         updated = {**user, "email": "new@test.com"}
         token = self._make_token(uid)
         with patch("main.users_col") as mock_users:
-            mock_users.find_one.side_effect = [user, updated]
+            # find_one: (1) get_current_user, (2) duplicate-email check -> None, (3) refetch
+            mock_users.find_one.side_effect = [user, None, updated]
             mock_users.update_one.return_value = None
             r = self._patch({"email": "new@test.com"}, token)
         assert r.status_code == 200
@@ -2028,7 +2029,7 @@ class TestUpdateAccount:
         updated = {**user, "name": "New", "email": "new@test.com"}
         token = self._make_token(uid)
         with patch("main.users_col") as mock_users:
-            mock_users.find_one.side_effect = [user, updated]
+            mock_users.find_one.side_effect = [user, None, updated]
             mock_users.update_one.return_value = None
             r = self._patch({"name": "New", "email": "new@test.com"}, token)
         assert r.status_code == 200
@@ -2073,7 +2074,7 @@ class TestUpdateAccount:
         user = {"_id": ObjectId(uid), "username": "tester", "name": "Old", "email": "old@test.com"}
         token = self._make_token(uid)
         with patch("main.users_col") as mock_users:
-            mock_users.find_one.side_effect = [user, {**user, "email": "mixed.case@test.com"}]
+            mock_users.find_one.side_effect = [user, None, {**user, "email": "mixed.case@test.com"}]
             mock_users.update_one.return_value = None
             r = self._patch({"email": "Mixed.Case@Test.COM"}, token)
         assert r.status_code == 200
@@ -3363,12 +3364,20 @@ class TestChangePassword:
         return create_token(user_id)
 
     def _post(self, body, token):
-        client = TestClient(main.app)
-        return client.post("/auth/change-password", json=body, headers={"Authorization": f"Bearer {token}"})
+        main.limiter.enabled = False
+        try:
+            client = TestClient(main.app)
+            return client.post("/auth/change-password", json=body, headers={"Authorization": f"Bearer {token}"})
+        finally:
+            main.limiter.enabled = True
 
     def test_requires_auth(self):
-        client = TestClient(main.app)
-        r = client.post("/auth/change-password", json={"currentPassword": "x", "newPassword": "NewPass123!"})
+        main.limiter.enabled = False
+        try:
+            client = TestClient(main.app)
+            r = client.post("/auth/change-password", json={"currentPassword": "x", "newPassword": "NewPass123!"})
+        finally:
+            main.limiter.enabled = True
         assert r.status_code == 401
 
     def test_wrong_current_password_rejected(self):
@@ -3410,3 +3419,88 @@ class TestChangePassword:
         assert "password" in update_call[0][1]["$set"]
         payload = jwt.decode(data["token"], main.JWT_SECRET, algorithms=["HS256"])
         assert payload["tokenVersion"] == 1
+
+
+# ─── SECURITY HARDENING (F119-s) ─────────────────────────────────────────────
+
+class TestSafeFilename:
+    def test_strips_crlf(self):
+        assert "\n" not in main._safe_filename("evil\r\nInjected: x")
+        assert "\r" not in main._safe_filename("evil\r\nInjected: x")
+
+    def test_strips_quotes(self):
+        assert '"' not in main._safe_filename('a"b"c.pdf')
+        assert "'" not in main._safe_filename("a'b'c.pdf")
+
+    def test_replaces_path_separators(self):
+        assert "/" not in main._safe_filename("../../etc/passwd")
+        assert "\\" not in main._safe_filename("..\\..\\etc\\passwd")
+        assert ".." not in main._safe_filename("../secret.pdf")
+
+    def test_falls_back_on_empty(self):
+        assert main._safe_filename("") == "file"
+        assert main._safe_filename(None) == "file"
+        assert main._safe_filename('""""') == "file"
+
+    def test_preserves_valid_name(self):
+        assert main._safe_filename("MyWill.pdf") == "MyWill.pdf"
+
+
+class TestUpdateMeEmailConflict:
+    def _user(self):
+        return {"_id": ObjectId("aaaaaaaaaaaaaaaaaaaaaaaa"), "email": "jane@example.com", "name": "Jane", "tokenVersion": 0}
+
+    def _token(self):
+        return create_token("aaaaaaaaaaaaaaaaaaaaaaaa")
+
+    def test_duplicate_email_returns_409(self):
+        token = self._token()
+        other = {"_id": ObjectId("bbbbbbbbbbbbbbbbbbbbbbbb"), "email": "taken@example.com", "name": "Other", "tokenVersion": 0}
+        with patch("main.users_col") as mock_users:
+            mock_users.find_one.side_effect = [self._user(), other]
+            r = TestClient(main.app).patch(
+                "/auth/me", json={"email": "taken@example.com"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        assert r.status_code == 409
+
+    def test_same_email_is_allowed(self):
+        token = self._token()
+        user = self._user()
+        with patch("main.users_col") as mock_users:
+            mock_users.find_one.side_effect = [user, user]
+            mock_users.update_one.return_value = None
+            r = TestClient(main.app).patch(
+                "/auth/me", json={"email": "jane@example.com"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        assert r.status_code == 200
+
+
+class TestSecurityHardening:
+    def test_permissions_policy_and_cross_domain_headers(self):
+        import asyncio
+        from main import add_security_headers
+        from starlette.responses import JSONResponse
+        from starlette.requests import Request
+        scope = {"type": "http", "method": "GET", "path": "/health", "headers": [], "query_string": b""}
+        request = Request(scope)
+
+        async def dummy_call_next(req):
+            return JSONResponse({"ok": True})
+
+        resp = asyncio.new_event_loop().run_until_complete(add_security_headers(request, dummy_call_next))
+        assert "geolocation=()" in resp.headers.get("Permissions-Policy", "")
+        assert resp.headers.get("X-Permitted-Cross-Domain-Policies") == "none"
+
+    def test_cors_preflight_allows_patch(self):
+        r = TestClient(main.app).options(
+            "/auth/me",
+            headers={
+                "Origin": "https://kinlight.app",
+                "Access-Control-Request-Method": "PATCH",
+                "Access-Control-Request-Headers": "content-type,authorization",
+            },
+        )
+        assert r.status_code == 200
+        assert "PATCH" in r.headers.get("Access-Control-Allow-Methods", "")

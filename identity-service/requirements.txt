@@ -16,5 +16,6 @@ pywebpush==2.0.0
 python-multipart==0.0.32
 webauthn==2.7.1
 
-# Test-only: required by starlette.testclient.TestClient (used in F91 rate-limit tests)
-httpx2==2.4.0
+# Test-only: required by starlette.testclient.TestClient (used in F91 rate-limit tests).
+# Note: starlette 1.3.x imports `httpx2` (not `httpx`) — do not rename this.
+httpx2==2.12.0

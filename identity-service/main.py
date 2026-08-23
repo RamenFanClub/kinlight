@@ -151,7 +151,7 @@ app.add_middleware(
         "https://api.kinlight.app",
     ],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
 
@@ -163,6 +163,9 @@ async def add_security_headers(request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    # F119-s: disable browser feature access the app never uses (OWASP A05).
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=(), payment=(), usb=()"
+    response.headers["X-Permitted-Cross-Domain-Policies"] = "none"
     return response
 
 
@@ -1091,7 +1094,7 @@ def send_notification_email(contact: dict, vault_doc: dict, holder_name: str = "
 
     pdf_bytes = generate_pdf_for_contact(contact, vault_doc, holder_name)
     attachments = [{
-        "filename": f"Kinlight-{first}-{last}.pdf",
+        "filename": _safe_filename(f"Kinlight-{first}-{last}.pdf"),
         "content": base64.b64encode(pdf_bytes).decode("utf-8"),
     }]
 
@@ -1108,7 +1111,7 @@ def send_notification_email(contact: dict, vault_doc: dict, holder_name: str = "
             fsize = len(data)
             if total_size + fsize <= max_attach:
                 attachments.append({
-                    "filename": will.get("filename", "Will.pdf"),
+                    "filename": _safe_filename(will.get("filename", "Will.pdf")),
                     "content": base64.b64encode(data).decode("utf-8"),
                 })
                 total_size += fsize
@@ -1127,7 +1130,7 @@ def send_notification_email(contact: dict, vault_doc: dict, holder_name: str = "
                 fsize = len(data)
                 if total_size + fsize <= max_attach:
                     attachments.append({
-                        "filename": d.get("filename", "document.pdf"),
+                        "filename": _safe_filename(d.get("filename", "document.pdf")),
                         "content": base64.b64encode(data).decode("utf-8"),
                     })
                     total_size += fsize
@@ -1677,6 +1680,12 @@ def update_me(body: dict, current_user: dict = Depends(get_current_user)):
         # Basic email format check
         if not re_mod.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
             raise HTTPException(status_code=400, detail="Invalid email format")
+        # F119-s: reject a change to an email already owned by another account —
+        # avoids a unique-index write error surfacing as a raw 500.
+        if email != (current_user.get("email", "") or "").lower():
+            existing = users_col.find_one({"email": email})
+            if existing is not None and str(existing["_id"]) != str(current_user["_id"]):
+                raise HTTPException(status_code=409, detail="Email address is already in use.")
         updates["email"] = email
 
     if not updates:
@@ -1688,7 +1697,8 @@ def update_me(body: dict, current_user: dict = Depends(get_current_user)):
 
 
 @app.post("/auth/change-password")
-def change_password(body: dict, current_user: dict = Depends(get_current_user)):
+@limiter.limit("5/minute", key_func=get_user_or_ip)
+def change_password(request: Request, body: dict, current_user: dict = Depends(get_current_user)):
     """F119: change the authenticated user's password (requires the current one).
 
     Increments tokenVersion to revoke sessions on every other device, then issues
@@ -1760,7 +1770,8 @@ def request_reset(request: Request, body: dict):
 
 
 @app.post("/auth/reset-password")
-def reset_password(body: dict):
+@limiter.limit("5/minute")
+def reset_password(request: Request, body: dict):
     """F66: Complete a password reset with a valid single-use token."""
     token = body.get("token", "")
     new_password = body.get("password", "")
@@ -2013,11 +2024,26 @@ def vault_sync(body: dict, current_user: dict = Depends(get_current_user)):
 
     now = now_utc()
 
+    # F119-s: sanitize user-controlled filenames at the source so downstream
+    # ZIP/attachment/Content-Disposition consumers can't receive CRLF or path
+    # separators (defense-in-depth alongside point-of-use sanitization).
+    will = vault_blob.get("will")
+    if isinstance(will, dict) and will.get("filename"):
+        will = {**will, "filename": _safe_filename(will["filename"])}
+
+    supp_docs = vault_blob.get("suppDocs", [])
+    if isinstance(supp_docs, list):
+        supp_docs = [
+            ({**d, "filename": _safe_filename(d["filename"])}
+             if isinstance(d, dict) and d.get("filename") else d)
+            for d in supp_docs
+        ]
+
     content = {
         "assets":    vault_blob.get("assets", []),
         "wishes":    vault_blob.get("wishes", []),
-        "will":      vault_blob.get("will"),
-        "suppDocs":  vault_blob.get("suppDocs", []),
+        "will":      will,
+        "suppDocs":  supp_docs,
         "kin":       vault_blob.get("kin", []),
         "v":         vault_blob.get("v", "face"),
         "notifySeq": vault_blob.get("notifySeq", "in_order"),
@@ -2134,20 +2160,20 @@ def preview_package(
     buf = io.BytesIO()
     file_count = 1  # PDF
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(f"Kinlight-{first}-{last}.pdf", pdf_bytes)
+        zf.writestr(_safe_filename(f"Kinlight-{first}-{last}.pdf"), pdf_bytes)
 
         will = vault_content.get("will") if isinstance(vault_content, dict) else None
         if will and will.get("file_id"):
             data = _download_and_decrypt(will["file_id"])
             if data:
-                zf.writestr(will.get("filename", "Will.pdf"), data)
+                zf.writestr(_safe_filename(will.get("filename", "Will.pdf")), data)
                 file_count += 1
 
         for d in vault_content.get("suppDocs", []) if isinstance(vault_content, dict) else []:
             if d.get("file_id"):
                 data = _download_and_decrypt(d["file_id"])
                 if data:
-                    zf.writestr(d.get("filename", "document.pdf"), data)
+                    zf.writestr(_safe_filename(d.get("filename", "document.pdf")), data)
                     file_count += 1
 
     buf.seek(0)
@@ -2162,7 +2188,7 @@ def preview_package(
         content=buf.getvalue(),
         media_type="application/zip",
         headers={
-            "Content-Disposition": f'attachment; filename="Kinlight-{first}-{last}.zip"',
+            "Content-Disposition": f'attachment; filename="{_safe_filename(f"Kinlight-{first}-{last}.zip")}"',
         },
     )
 
@@ -2211,7 +2237,7 @@ def test_notification(request: Request, current_user: dict = Depends(get_current
             fsize = len(data)
             if total_size + fsize <= max_attach:
                 attachments.append({
-                    "filename": will.get("filename", "Will.pdf"),
+                    "filename": _safe_filename(will.get("filename", "Will.pdf")),
                     "content": base64.b64encode(data).decode("utf-8"),
                 })
                 total_size += fsize
@@ -2223,7 +2249,7 @@ def test_notification(request: Request, current_user: dict = Depends(get_current
                 fsize = len(data)
                 if total_size + fsize <= max_attach:
                     attachments.append({
-                        "filename": d.get("filename", "document.pdf"),
+                        "filename": _safe_filename(d.get("filename", "document.pdf")),
                         "content": base64.b64encode(data).decode("utf-8"),
                     })
                     total_size += fsize
@@ -2580,6 +2606,21 @@ def _validate_filename(filename: str) -> bool:
     return False
 
 
+def _safe_filename(name: str, fallback: str = "file") -> str:
+    """F119-s: sanitize a user-controlled name for use in a Content-Disposition
+    header or a ZIP entry name. Strips CR/LF (header-injection) and quotes,
+    collapses any path separators, and falls back if nothing safe remains."""
+    if not name:
+        return fallback
+    cleaned = (
+        name.replace("\r", "").replace("\n", "")
+            .replace('"', "").replace("'", "")
+            .replace("/", "_").replace("\\", "_")
+            .replace("..", "_")
+    ).strip()
+    return cleaned or fallback
+
+
 # File-type magic byte signatures (first bytes of each supported format).
 # Tuple: (bytes to match, description)
 _MAGIC_SIGNATURES = [
@@ -2740,7 +2781,7 @@ def download_file(
 
     from fastapi.responses import Response
     headers = {
-        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Content-Disposition": f'attachment; filename="{_safe_filename(filename)}"',
         "Content-Type": content_type,
     }
     return Response(content=plaintext, headers=headers, media_type=content_type)

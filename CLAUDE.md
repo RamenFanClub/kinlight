@@ -429,7 +429,7 @@ lockedUntil, createdAt, lastLogin
 
 **File:** `identity-service/test_main.py`
 **Run:** `python3 -m pytest test_main.py -v`
-**Expected:** 304 passed
+**Expected:** 318 passed
 
 ### Coverage by feature
 
