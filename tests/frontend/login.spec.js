@@ -88,4 +88,25 @@ test.describe('Login Flow', () => {
     expect(cachedAfterLogout).toBeNull();
   });
 
+  test('passkey sign-in button is visible (F118)', async ({ page }) => {
+    const btn = page.locator('#lv-login .login-btn').filter({ hasText: 'Sign in with passkey' });
+    await expect(btn).toBeVisible();
+  });
+
+  test('login sends a new-device identifier (F117)', async ({ page }) => {
+    await setupPage(page, { user: { name: 'Test User', email: 'tester_01@example.com' } });
+    let loginBody = null;
+    page.on('request', (req) => {
+      if (req.url().includes('/auth/login') && req.method() === 'POST') {
+        loginBody = JSON.parse(req.postData() || '{}');
+      }
+    });
+    await loginViaUI(page);
+    expect(loginBody).not.toBeNull();
+    expect(loginBody.deviceId).toBeTruthy();
+    expect(typeof loginBody.deviceName).toBe('string');
+    const stored = await page.evaluate(() => localStorage.getItem('ee_device_id'));
+    expect(stored).toBe(loginBody.deviceId);
+  });
+
 });

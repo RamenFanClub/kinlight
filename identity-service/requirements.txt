@@ -14,6 +14,7 @@ cryptography==50.0.0
 slowapi==0.1.10
 pywebpush==2.0.0
 python-multipart==0.0.32
+webauthn==2.7.1
 
 # Test-only: required by starlette.testclient.TestClient (used in F91 rate-limit tests)
 httpx2==2.4.0

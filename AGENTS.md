@@ -30,10 +30,28 @@
 
 ---
 
+## ✅ CHECKPOINT COMPLETE — F117 + F118 (Security: new-device alerts + passkeys)
+
+> **Completed:** 23 Aug 2026
+> **Status:** Code complete (309 pytest tests pass; 13 Playwright settings/login tests).
+
+### What was built
+- **F117 (New-device sign-in alert):** Frontend generates a persistent `localStorage['ee_device_id']` (`crypto.randomUUID()`) + device name, sent with every login. Backend `known_devices` collection + `register_device_login()` fires an email (Resend) + push (to already-enrolled devices) the first time a device is seen. Alerts run on a daemon thread. `ee_device_id` is **not** cleared on logout.
+- **F118 (Passkey sign-in, opt-in):** Standard WebAuthn passkeys via `webauthn==2.7.1`. `RP_ID="kinlight.app"`, `EXPECTED_ORIGIN="https://kinlight.app"`. "Sign in with passkey" button on the login wall + a "Passkeys" card in Settings (add/list/remove). Password login stays the default; passkey is additive. `clean_user` exposes a denormalized `hasPasskey` flag. **Google SSO explicitly deferred.**
+- **F119 (In-app change password):** Settings → Account → "Change password". `POST /auth/change-password` verifies the current password, bumps `tokenVersion` (revokes other sessions), and returns a fresh JWT so the current session stays signed in.
+
+### Key reminders
+- New collections: `known_devices` (unique `{userId, deviceId}`) and `webauthn_credentials` (unique `credentialId`). Both indexed at startup.
+- `hasPasskey` is denormalized on the user doc — keep it in sync on passkey register/delete (done in `main.py`).
+- WebAuthn challenges live in an in-memory dict (5-min TTL), single-worker GCE — fine for now.
+- `webauthn` is now in `requirements.txt` (pin `==2.7.1`; the v3 API differs).
+
+---
+
 ## Before pushing
 
 ```bash
-./test.sh   # Runs pytest — must be 261 passed
+./test.sh   # Runs pytest — must be 309 passed
 cp index.html frontend/index.html   # Keep both copies in sync
 # Also sync PWA files (F100):
 cp manifest.json sw.js favicon.svg icon-192.png icon-512.png frontend/
@@ -47,7 +65,7 @@ cp manifest.json sw.js favicon.svg icon-192.png icon-512.png frontend/
 |-------|-------|-------|
 | Frontend | `./index.html` + `./frontend/index.html` | Single-file HTML/CSS/JS. GitHub Pages (`ramenfanclub.github.io/emergency-exit` → `kinlight.app`) |
 | Backend | `identity-service/main.py` | Python FastAPI. GCE e2-micro (`api.kinlight.app`) |
-| Database | MongoDB Atlas | Users + vaults + push_subscriptions collections |
+| Database | MongoDB Atlas | Users + vaults + push_subscriptions + trusted_links + known_devices + webauthn_credentials collections |
 | Email | Resend (`resend.com`) | From `hello@kinlight.app` |
 | CI/CD | `.github/workflows/ci.yml` | 4 jobs: pytest, sync check, Playwright, pip-audit |
 

@@ -3096,3 +3096,317 @@ class TestTrustedFieldsRoundTrip:
         doc = {"trustedEnabled": True, "content": {}}
         blob = reconstruct_vault_blob(doc)
         assert blob["trustedEnabled"] is True
+
+
+# ─── F117: NEW-DEVICE SIGN-IN ALERTS ─────────────────────────────────────────
+
+class TestNewDeviceAlert:
+    def _user(self):
+        return {"_id": ObjectId(), "email": "jane@example.com", "name": "Jane Doe"}
+
+    def _request(self):
+        from starlette.requests import Request
+        scope = {
+            "type": "http", "method": "POST", "path": "/auth/login",
+            "headers": [(b"user-agent", b"test-agent")], "query_string": b"",
+        }
+        return Request(scope)
+
+    def test_no_device_id_is_noop(self):
+        with patch("main.known_devices_col") as col:
+            main.register_device_login(self._user(), "", "", self._request())
+        col.find_one.assert_not_called()
+
+    def test_known_device_updates_last_seen(self):
+        col = MagicMock()
+        col.find_one.return_value = {"_id": ObjectId(), "deviceName": "iPhone"}
+        with patch("main.known_devices_col", col):
+            main.register_device_login(self._user(), "dev-1", "iPhone", self._request())
+        col.update_one.assert_called_once()
+        assert "lastSeenAt" in col.update_one.call_args[0][1]["$set"]
+
+    def test_unknown_device_inserts_and_alerts(self):
+        col = MagicMock()
+        col.find_one.return_value = None
+        with patch("main.known_devices_col", col), \
+             patch("main.threading.Thread") as mock_thread:
+            main.register_device_login(self._user(), "dev-2", "iPhone", self._request())
+        col.insert_one.assert_called_once()
+        mock_thread.assert_called_once()
+
+    def test_notify_new_device_sends_email_and_push(self):
+        with patch("main.send_new_device_email", return_value=True) as email, \
+             patch("main.send_push_to_user") as push:
+            main._notify_new_device(self._user(), "iPhone", "1.2.3.4", "ua", main.now_utc())
+        email.assert_called_once()
+        push.assert_called_once()
+
+    def test_send_new_device_email_calls_send(self):
+        with patch("main._send_email", return_value=True) as s:
+            ok = main.send_new_device_email(self._user(), "iPhone", "1.2.3.4", "ua", main.now_utc())
+        assert ok is True
+        s.assert_called_once()
+        assert "New sign-in" in s.call_args[0][1]
+
+    def test_send_new_device_email_no_email_returns_false(self):
+        u = {"_id": ObjectId(), "name": "Jane"}
+        with patch("main._send_email") as s:
+            ok = main.send_new_device_email(u, "iPhone", "1.2.3.4", "ua", main.now_utc())
+        assert ok is False
+        s.assert_not_called()
+
+    def test_device_label_falls_back(self):
+        assert main._device_label("") == "a new device"
+        assert main._device_label("Mozilla/5.0 (iPhone)") == "iPhone"
+        assert main._device_label("Mozilla/5.0 (Windows NT 10.0)") == "Windows PC"
+
+
+# ─── F118: PASSKEY (WEBAUTHN) ENDPOINTS ───────────────────────────────────────
+
+class TestWebAuthn:
+    def _user(self):
+        return {
+            "_id": ObjectId("aaaaaaaaaaaaaaaaaaaaaaaa"),
+            "email": "jane@example.com",
+            "name": "Jane",
+            "tokenVersion": 0,
+        }
+
+    def _token(self, user_id="aaaaaaaaaaaaaaaaaaaaaaaa"):
+        return create_token(user_id)
+
+    def _auth_headers(self, token):
+        return {"Authorization": f"Bearer {token}"}
+
+    def _fake_registration(self):
+        v = MagicMock()
+        v.credential_id = b"0123456789abcdef"
+        v.credential_public_key = b"public-key-bytes"
+        v.sign_count = 0
+        return v
+
+    def _fake_authentication(self):
+        v = MagicMock()
+        v.new_sign_count = 1
+        return v
+
+    # -- register options -----------------------------------------------------
+
+    def test_register_options_requires_auth(self):
+        client = TestClient(main.app)
+        r = client.get("/auth/webauthn/register/options")
+        assert r.status_code == 401
+
+    def test_register_options_returns_options(self):
+        token = self._token()
+        with patch("main.users_col") as mock_users, patch("main.webauthn_creds_col") as mock_creds, \
+             patch("main.generate_challenge", return_value=b"challenge"):
+            mock_users.find_one.return_value = self._user()
+            mock_creds.find.return_value = []
+            r = TestClient(main.app).get(
+                "/auth/webauthn/register/options", headers=self._auth_headers(token),
+            )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["ok"] is True
+        assert data["challengeId"]
+        assert data["options"]["rp"]["id"] == "kinlight.app"
+
+    # -- register verify ------------------------------------------------------
+
+    def test_register_verify_stores_credential(self):
+        token = self._token()
+        user = self._user()
+        challenge_id = main._webauthn_store_challenge(b"challenge", str(user["_id"]))
+        with patch("main.users_col") as mock_users, patch("main.webauthn_creds_col") as mock_creds, \
+             patch("main.verify_registration_response", return_value=self._fake_registration()):
+            mock_users.find_one.return_value = user
+            mock_creds.find_one.return_value = None
+            mock_creds.insert_one.return_value = None
+            mock_users.update_one.return_value = None
+            r = TestClient(main.app).post(
+                "/auth/webauthn/register/verify",
+                json={"challengeId": challenge_id, "credential": {"id": "credid", "response": {}}},
+                headers=self._auth_headers(token),
+            )
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+        mock_creds.insert_one.assert_called_once()
+        # hasPasskey flag kept in sync on the user doc
+        assert mock_users.update_one.call_args[0][1]["$set"]["hasPasskey"] is True
+
+    def test_register_verify_requires_matching_challenge_user(self):
+        token = self._token()
+        user = self._user()
+        challenge_id = main._webauthn_store_challenge(b"challenge", "bbbbbbbbbbbbbbbbbbbbbbbb")
+        with patch("main.users_col") as mock_users, patch("main.webauthn_creds_col") as mock_creds:
+            mock_users.find_one.return_value = user
+            r = TestClient(main.app).post(
+                "/auth/webauthn/register/verify",
+                json={"challengeId": challenge_id, "credential": {"id": "credid", "response": {}}},
+                headers=self._auth_headers(token),
+            )
+        assert r.status_code == 400
+
+    # -- login options --------------------------------------------------------
+
+    def test_login_options_requires_no_auth(self):
+        with patch("main.webauthn_creds_col") as mock_creds, \
+             patch("main.generate_challenge", return_value=b"challenge"):
+            mock_creds.find.return_value = []
+            r = TestClient(main.app).post("/auth/webauthn/login/options", json={})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["challengeId"]
+        assert data["options"]["rpId"] == "kinlight.app"
+
+    def test_login_options_narrows_to_known_email(self):
+        user = self._user()
+        with patch("main.users_col") as mock_users, patch("main.webauthn_creds_col") as mock_creds, \
+             patch("main.generate_challenge", return_value=b"challenge"):
+            mock_users.find_one.return_value = user
+            mock_creds.find.return_value = []
+            r = TestClient(main.app).post("/auth/webauthn/login/options", json={"email": "jane@example.com"})
+        assert r.status_code == 200
+
+    # -- login verify ---------------------------------------------------------
+
+    def test_login_verify_issues_token(self):
+        user = self._user()
+        challenge_id = main._webauthn_store_challenge(b"challenge", str(user["_id"]))
+        stored = {
+            "_id": ObjectId(),
+            "userId": user["_id"],
+            "credentialId": "credid",
+            "publicKey": main.bytes_to_base64url(b"public-key-bytes"),
+            "signCount": 0,
+        }
+        with patch("main.users_col") as mock_users, patch("main.webauthn_creds_col") as mock_creds, \
+             patch("main.verify_authentication_response", return_value=self._fake_authentication()), \
+             patch("main.known_devices_col"):
+            mock_users.find_one.return_value = user
+            mock_creds.find_one.return_value = stored
+            mock_creds.update_one.return_value = None
+            r = TestClient(main.app).post(
+                "/auth/webauthn/login/verify",
+                json={"challengeId": challenge_id, "credential": {"id": "credid", "response": {}}},
+            )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["ok"] is True
+        assert data["token"]
+        assert data["user"]["email"] == "jane@example.com"
+
+    def test_login_verify_unknown_credential_rejected(self):
+        challenge_id = main._webauthn_store_challenge(b"challenge", None)
+        with patch("main.webauthn_creds_col") as mock_creds:
+            mock_creds.find_one.return_value = None
+            r = TestClient(main.app).post(
+                "/auth/webauthn/login/verify",
+                json={"challengeId": challenge_id, "credential": {"id": "nope", "response": {}}},
+            )
+        assert r.status_code == 401
+
+    # -- credential management ------------------------------------------------
+
+    def test_list_credentials_requires_auth(self):
+        client = TestClient(main.app)
+        r = client.get("/auth/webauthn/credentials")
+        assert r.status_code == 401
+
+    def test_list_credentials_returns_metadata(self):
+        token = self._token()
+        cred = {
+            "credentialId": "credid",
+            "deviceName": "iPhone",
+            "createdAt": datetime.now(timezone.utc),
+            "lastUsedAt": None,
+        }
+        with patch("main.users_col") as mock_users, patch("main.webauthn_creds_col") as mock_creds:
+            mock_users.find_one.return_value = self._user()
+            mock_creds.find.return_value.sort.return_value = [cred]
+            r = TestClient(main.app).get(
+                "/auth/webauthn/credentials", headers=self._auth_headers(token),
+            )
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+        assert r.json()["credentials"][0]["id"] == "credid"
+
+    def test_delete_credential_removes_and_syncs_flag(self):
+        token = self._token()
+        with patch("main.users_col") as mock_users, patch("main.webauthn_creds_col") as mock_creds:
+            mock_users.find_one.return_value = self._user()
+            mock_creds.delete_one.return_value = MagicMock(deleted_count=1)
+            mock_creds.count_documents.return_value = 0
+            mock_users.update_one.return_value = None
+            r = TestClient(main.app).delete(
+                "/auth/webauthn/credentials/credid", headers=self._auth_headers(token),
+            )
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+        assert mock_users.update_one.call_args[0][1]["$set"]["hasPasskey"] is False
+
+
+# ─── F119: CHANGE PASSWORD (IN-APP) ──────────────────────────────────────────
+
+class TestChangePassword:
+    def _user(self, password="OldPass123!"):
+        return {
+            "_id": ObjectId("aaaaaaaaaaaaaaaaaaaaaaaa"),
+            "email": "jane@example.com",
+            "name": "Jane",
+            "password": main.hash_password(password),
+            "tokenVersion": 0,
+        }
+
+    def _token(self, user_id="aaaaaaaaaaaaaaaaaaaaaaaa"):
+        return create_token(user_id)
+
+    def _post(self, body, token):
+        client = TestClient(main.app)
+        return client.post("/auth/change-password", json=body, headers={"Authorization": f"Bearer {token}"})
+
+    def test_requires_auth(self):
+        client = TestClient(main.app)
+        r = client.post("/auth/change-password", json={"currentPassword": "x", "newPassword": "NewPass123!"})
+        assert r.status_code == 401
+
+    def test_wrong_current_password_rejected(self):
+        token = self._token()
+        with patch("main.users_col") as mock_users:
+            mock_users.find_one.return_value = self._user()
+            r = self._post({"currentPassword": "WrongPass1!", "newPassword": "NewPass123!"}, token)
+        assert r.status_code == 400
+
+    def test_weak_new_password_rejected(self):
+        token = self._token()
+        with patch("main.users_col") as mock_users:
+            mock_users.find_one.return_value = self._user()
+            r = self._post({"currentPassword": "OldPass123!", "newPassword": "short"}, token)
+        assert r.status_code == 400
+
+    def test_same_password_rejected(self):
+        token = self._token()
+        with patch("main.users_col") as mock_users:
+            mock_users.find_one.return_value = self._user()
+            r = self._post({"currentPassword": "OldPass123!", "newPassword": "OldPass123!"}, token)
+        assert r.status_code == 400
+
+    def test_success_returns_fresh_token_and_bumps_version(self):
+        token = self._token()
+        user = self._user()
+        updated = {**user, "password": main.hash_password("NewPass123!"), "tokenVersion": 1}
+        with patch("main.users_col") as mock_users:
+            mock_users.find_one.side_effect = [user, updated]
+            mock_users.update_one.return_value = None
+            r = self._post({"currentPassword": "OldPass123!", "newPassword": "NewPass123!"}, token)
+        assert r.status_code == 200
+        data = r.json()
+        assert data["ok"] is True
+        assert data["token"]
+        assert data["user"]["email"] == "jane@example.com"
+        update_call = mock_users.update_one.call_args
+        assert update_call[0][1]["$inc"]["tokenVersion"] == 1
+        assert "password" in update_call[0][1]["$set"]
+        payload = jwt.decode(data["token"], main.JWT_SECRET, algorithms=["HS256"])
+        assert payload["tokenVersion"] == 1

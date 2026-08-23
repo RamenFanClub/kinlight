@@ -340,6 +340,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
       <div class="login-fi"><label>Email</label><input id="li-user" type="email" placeholder="you@email.com" autocomplete="email" autocapitalize="none" spellcheck="false"/></div>
       <div class="login-fi"><label>Password</label><input id="li-pass" type="password" placeholder="password" autocomplete="current-password"/></div>
       <button class="login-btn" onclick="doLogin()">Sign in</button>
+      <button class="login-btn" onclick="doPasskeyLogin()" style="background:var(--w);color:var(--p);border-bottom-color:transparent;box-shadow:inset 0 0 0 1px var(--sx);margin-top:10px;"><span class="m" style="font-size:18px;vertical-align:-4px;margin-right:6px;">key</span>Sign in with passkey</button>
       <a class="login-link" onclick="showLoginView('forgot')">Forgot your password?</a>
       <div class="login-msg" id="login-msg"></div>
       <div class="login-err" id="login-err">Incorrect email or password. Please try again.</div>
@@ -624,6 +625,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
         <div style="background:var(--w);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:6px;">
           <div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-size:11px;color:var(--ov);">Name</span><span id="acct-name" style="font-size:13px;font-weight:600;color:var(--p);">—</span></div>
           <div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-size:11px;color:var(--ov);">Email</span><span id="acct-email" style="font-size:13px;font-weight:600;color:var(--p);">—</span></div>
+          <button class="ob" style="width:100%;justify-content:center;padding:10px;margin-top:8px;" onclick="openPwM()"><span class="m" style="font-size:16px;">lock</span><span>Change password</span></button>
         </div>
       </div>
       <div class="card"><div class="st" style="margin-bottom:14px;"><span class="m mf" style="font-size:17px;color:var(--sec);">pulse_alert</span>Check in every</div><div style="background:var(--w);border-radius:12px;padding:14px;"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;"><span style="font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--sec);">Interval</span><div class="tg"><button class="to" id="tw" onclick="setU('weeks')">Weeks</button><button class="to on" id="tm" onclick="setU('months')">Months</button></div></div><div class="cc"><button class="cb" onclick="adj(-1)">−</button><div><div class="cv" id="fc">2</div><div class="cu" id="fu">Months</div></div><button class="cb" onclick="adj(1)">+</button></div><div id="next-due-line" style="margin-top:12px;font-size:12px;color:var(--ov);text-align:center;"></div><div id="freq-grace-warn" style="display:none;margin-top:8px;font-size:12px;color:var(--am);text-align:center;padding:6px 10px;background:var(--am-bg);border-radius:8px;border:1px solid var(--am-border);"></div></div></div>
@@ -662,6 +664,12 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
         <div id="push-status" style="font-size:11px;color:var(--ac);margin-top:8px;text-align:center;display:none;"></div>
       </div>
       <div class="card"><div class="st" style="margin-bottom:14px;"><span class="m mf" style="font-size:17px;color:var(--sec);">verified_user</span>Verification</div><div class="ri" style="opacity:0.45;cursor:default;pointer-events:none;"><div class="rl"><span class="m" style="font-size:19px;color:var(--sec);">face</span><div><span style="font-weight:600;font-size:15px;color:var(--p);">FaceID / Biometrics</span><span style="display:block;font-size:11px;color:var(--ov);margin-top:2px;">Coming soon</span></div></div><div class="rd" id="rf"></div></div><div class="ri" onclick="setV('pin')"><div class="rl"><span class="m" style="font-size:19px;color:var(--sec);">password</span><span style="font-weight:600;font-size:15px;color:var(--p);">Secure Passcode</span></div><div class="rd on" id="rp2"></div></div></div>
+      <div class="card"><div class="st" style="margin-bottom:14px;"><span class="m mf" style="font-size:17px;color:var(--sec);">key</span>Passkeys</div>
+        <div style="font-size:12px;color:var(--ov);margin-bottom:12px;line-height:1.5;">Sign in without a password using Face ID, Touch ID, or your device lock. Your passkey is stored securely on your device.</div>
+        <button class="ob" style="width:100%;justify-content:center;padding:12px;" onclick="registerPasskey()"><span class="m" style="font-size:18px;">add</span><span>Add a passkey</span></button>
+        <div id="passkey-status" style="font-size:11px;color:var(--ac);margin-top:8px;text-align:center;display:none;"></div>
+        <div id="passkey-list" style="margin-top:12px;"></div>
+      </div>
       <div class="card"><div class="st" style="margin-bottom:14px;"><span class="m" style="font-size:17px;color:var(--sec);">download</span>Your Data</div>
         <div style="font-size:12px;color:var(--ov);margin-bottom:12px;line-height:1.5;">Download a copy of everything in your vault as a JSON file. Contact emails and phone numbers are removed to protect their privacy.</div>
         <button class="ob" style="width:100%;justify-content:center;padding:12px;" onclick="exportVault()"><span class="m" style="font-size:18px;">download</span>Download my data</button>
@@ -712,6 +720,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 
 <!-- Edit Account modal -->
 <div id="acctm" class="mo"><div class="ms"><div class="mh"></div><div class="mt">Edit Account</div><div class="fi"><label>Name</label><input id="acctm-name" type="text" placeholder="Your name"/></div><div class="fi"><label>Email</label><input id="acctm-email" type="email" placeholder="you@email.com"/></div><div class="mr"><button class="cxb" onclick="closeM()">Cancel</button><button class="cfb" onclick="saveAccount()" id="acctm-save-btn">Save</button></div></div></div>
+<div id="pwmodal" class="mo"><div class="ms"><div class="mh"></div><div class="mt">Change password</div><div class="fi"><label>Current password</label><input id="pw-cur" type="password" autocomplete="current-password"/></div><div class="fi"><label>New password</label><input id="pw-new" type="password" placeholder="At least 8 characters" autocomplete="new-password"/></div><div class="fi"><label>Confirm new password</label><input id="pw-new2" type="password" placeholder="Type it again" autocomplete="new-password"/></div><div class="login-err" id="pw-err"></div><div class="mr"><button class="cxb" onclick="closeM()">Cancel</button><button class="cfb" onclick="doChangePassword()" id="pw-save-btn">Save</button></div></div></div>
 
 <!-- F01: Notification Queue modal -->
 <div id="nqm" class="mo">
@@ -819,7 +828,7 @@ async function doLogin(){
   errEl.classList.remove('on');
   if(!email||!password){errEl.textContent='Please enter your email and password.';errEl.classList.add('on');return;}
   try{
-    const res=await fetch(API+'/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password})});
+    const res=await fetch(API+'/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password,deviceId:deviceId(),deviceName:deviceLabel()})});
     if(!res.ok){const err=await res.json().catch(()=>({}));errEl.textContent=(res.status===429&&err.detail)?err.detail:'Incorrect email or password.';errEl.classList.add('on');return;}
     const data=await res.json();
     sessionStorage.setItem('ee_token',data.token);
@@ -860,6 +869,132 @@ function doLogout(){
   $('li-pass').value='';
   S={...DEFAULT_STATE};
   render();
+}
+
+// ─── F117: NEW-DEVICE DETECTION ──────────────────────────────────────────────
+function deviceId(){
+  let d=localStorage.getItem('ee_device_id');
+  if(!d){
+    d=(crypto&&crypto.randomUUID)?crypto.randomUUID():('dev-'+Date.now()+'-'+Math.random().toString(36).slice(2));
+    localStorage.setItem('ee_device_id',d);
+  }
+  return d;
+}
+function deviceLabel(){
+  const ua=navigator.userAgent||'';
+  if(/iPhone/.test(ua))return 'iPhone';
+  if(/iPad/.test(ua))return 'iPad';
+  if(/Android/.test(ua))return 'Android device';
+  if(/Macintosh|Mac OS/.test(ua))return 'Mac';
+  if(/Windows/.test(ua))return 'Windows PC';
+  if(/Linux/.test(ua))return 'Linux device';
+  return 'a new device';
+}
+
+// ─── F118: PASSKEY (WEBAUTHN) ─────────────────────────────────────────────────
+function bufToB64url(buf){
+  const bytes=new Uint8Array(buf);let bin='';
+  for(let i=0;i<bytes.length;i++)bin+=String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+function serializeCredential(cred){
+  const r=cred.response||{};
+  return {
+    id:cred.id,
+    rawId:bufToB64url(cred.rawId),
+    type:cred.type,
+    response:{
+      clientDataJSON:bufToB64url(r.clientDataJSON),
+      attestationObject:r.attestationObject?bufToB64url(r.attestationObject):undefined,
+      signature:r.signature?bufToB64url(r.signature):undefined,
+      authenticatorData:r.authenticatorData?bufToB64url(r.authenticatorData):undefined,
+      userHandle:r.userHandle?bufToB64url(r.userHandle):null,
+    }
+  };
+}
+function prepCreationOptions(o){
+  o=Object.assign({},o);
+  o.challenge=urlBase64ToUint8Array(o.challenge);
+  if(o.user&&o.user.id)o.user.id=urlBase64ToUint8Array(o.user.id);
+  if(o.excludeCredentials)o.excludeCredentials=o.excludeCredentials.map(c=>Object.assign({},c,{id:urlBase64ToUint8Array(c.id)}));
+  return o;
+}
+function prepRequestOptions(o){
+  o=Object.assign({},o);
+  o.challenge=urlBase64ToUint8Array(o.challenge);
+  if(o.allowCredentials)o.allowCredentials=o.allowCredentials.map(c=>Object.assign({},c,{id:urlBase64ToUint8Array(c.id)}));
+  return o;
+}
+function passkeySupported(){return !!(window.PublicKeyCredential&&navigator.credentials);}
+
+async function doPasskeyLogin(){
+  const errEl=$('login-err');
+  errEl.classList.remove('on');
+  if(!passkeySupported()){errEl.textContent='Passkeys aren\u2019t supported in this browser.';errEl.classList.add('on');return;}
+  const email=$('li-user').value.trim();
+  try{
+    const ores=await fetch(API+'/auth/webauthn/login/options',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(email?{email}:{})});
+    if(!ores.ok)throw new Error('options');
+    const odata=await ores.json();
+    const cred=await navigator.credentials.get({publicKey:prepRequestOptions(odata.options)});
+    const vres=await fetch(API+'/auth/webauthn/login/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({challengeId:odata.challengeId,credential:serializeCredential(cred),deviceId:deviceId(),deviceName:deviceLabel()})});
+    if(!vres.ok){const e=await vres.json().catch(()=>({}));errEl.textContent=e.detail||'Passkey sign-in failed.';errEl.classList.add('on');return;}
+    const data=await vres.json();
+    sessionStorage.setItem('ee_token',data.token);
+    sessionStorage.setItem('ee_user',JSON.stringify(data.user));
+    await showApp(data.user);
+  }catch(e){
+    if(e&&e.name==='NotAllowedError'){errEl.textContent='Passkey sign-in was cancelled.';}
+    else{errEl.textContent='Passkey sign-in failed. Make sure a passkey is registered for this account.';}
+    errEl.classList.add('on');
+  }
+}
+
+async function registerPasskey(){
+  if(!passkeySupported()){toast('Passkeys aren\u2019t supported in this browser');return;}
+  const statusEl=$('passkey-status');
+  if(statusEl){statusEl.style.display='block';statusEl.textContent='Adding passkey\u2026';}
+  try{
+    const ores=await fetch(API+'/auth/webauthn/register/options',{method:'GET',headers:authHeader()});
+    if(!ores.ok)throw new Error('options');
+    const odata=await ores.json();
+    const cred=await navigator.credentials.create({publicKey:prepCreationOptions(odata.options)});
+    const vres=await fetch(API+'/auth/webauthn/register/verify',{method:'POST',headers:{...authHeader(),'Content-Type':'application/json'},body:JSON.stringify({challengeId:odata.challengeId,credential:serializeCredential(cred),deviceName:deviceLabel()})});
+    if(!vres.ok){const e=await vres.json().catch(()=>({}));throw new Error(e.detail||'verification failed');}
+    toast('Passkey added \u2713');
+    loadPasskeys();
+  }catch(e){
+    toast('Could not add passkey \u2014 please try again');
+  }finally{
+    if(statusEl){statusEl.textContent='';statusEl.style.display='none';}
+  }
+}
+
+async function loadPasskeys(){
+  const listEl=$('passkey-list');
+  if(!listEl)return;
+  if(!sessionStorage.getItem('ee_token'))return;
+  try{
+    const res=await fetch(API+'/auth/webauthn/credentials',{headers:authHeader()});
+    if(!res.ok)return;
+    const data=await res.json();
+    const creds=data.credentials||[];
+    if(!creds.length){listEl.innerHTML='<div style="font-size:12px;color:var(--ov);">No passkeys yet.</div>';return;}
+    listEl.innerHTML=creds.map(c=>{
+      const name=esc(c.deviceName||'Passkey');
+      const used=c.lastUsedAt?('Last used '+c.lastUsedAt.slice(0,10)):'Never used';
+      return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid var(--sx);"><div><div style="font-weight:600;font-size:13px;color:var(--p);">'+name+'</div><div style="font-size:11px;color:var(--ov);">'+used+'</div></div><button class="ob" style="padding:4px 8px;font-size:11px;" onclick="deletePasskey(\''+esc(c.id)+'\')">Remove</button></div>';
+    }).join('');
+  }catch(e){}
+}
+
+async function deletePasskey(id){
+  try{
+    const res=await fetch(API+'/auth/webauthn/credentials/'+encodeURIComponent(id),{method:'DELETE',headers:authHeader()});
+    if(!res.ok){const e=await res.json().catch(()=>({}));toast(e.detail||'Could not remove passkey');return;}
+    toast('Passkey removed \u2713');
+    loadPasskeys();
+  }catch(e){toast('Could not remove passkey');}
 }
 
 // ─── F66: PASSWORD RESET ──────────────────────────────────────────────────────
@@ -992,6 +1127,7 @@ function go(s){
   $('s-'+s).classList.add('on');
   $('n-'+s).classList.add('on');
   document.querySelector('.body').scrollTop=0;
+  if(s==='config')loadPasskeys();
 }
 
 // ─── MODALS ───────────────────────────────────────────────────────────────────
@@ -1055,6 +1191,30 @@ async function saveAccount(){
     render();
     toast('Account updated ✓');
   }catch(e){toast('Could not reach server');}
+}
+
+// ─── F119: CHANGE PASSWORD ────────────────────────────────────────────────────
+function openPwM(){
+  ['pw-cur','pw-new','pw-new2'].forEach(i=>$(i).value='');
+  const e=$('pw-err'); if(e)e.classList.remove('on');
+  $('pwmodal').classList.add('on');
+}
+async function doChangePassword(){
+  const cur=$('pw-cur').value, p1=$('pw-new').value, p2=$('pw-new2').value;
+  const errEl=$('pw-err');
+  if(errEl)errEl.classList.remove('on');
+  if(!cur){ if(errEl){errEl.textContent='Enter your current password.';errEl.classList.add('on');} return; }
+  if(p1.length<8){ if(errEl){errEl.textContent='New password must be at least 8 characters.';errEl.classList.add('on');} return; }
+  if(p1!==p2){ if(errEl){errEl.textContent='Passwords don\u2019t match. Please type them again.';errEl.classList.add('on');} return; }
+  try{
+    const res=await fetch(API+'/auth/change-password',{method:'POST',headers:{...authHeader(),'Content-Type':'application/json'},body:JSON.stringify({currentPassword:cur,newPassword:p1})});
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok){ if(errEl){errEl.textContent=data.detail||'Could not change password.';errEl.classList.add('on');} return; }
+    sessionStorage.setItem('ee_token',data.token);
+    sessionStorage.setItem('ee_user',JSON.stringify(data.user));
+    closeM();
+    toast('Password updated \u2713');
+  }catch(e){ if(errEl){errEl.textContent='Connection error — please try again.';errEl.classList.add('on');} }
 }
 
 // ─── ONBOARDING ───────────────────────────────────────────────────────────────

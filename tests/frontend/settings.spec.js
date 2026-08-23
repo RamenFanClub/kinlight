@@ -63,4 +63,33 @@ test.describe('Settings', () => {
     expect(state.fc).toBe(3);
   });
 
+  test('Change password button opens the change-password modal (F119)', async ({ page }) => {
+    await page.locator('[onclick="openPwM()"]').click();
+    await expect(page.locator('#pwmodal')).toHaveClass(/on/);
+  });
+
+  test('Change password shows error when current password is empty (F119)', async ({ page }) => {
+    await page.locator('[onclick="openPwM()"]').click();
+    await page.click('#pw-save-btn');
+    await expect(page.locator('#pw-err')).toHaveText('Enter your current password.');
+  });
+
+  test('Change password success closes modal and stores new token (F119)', async ({ page }) => {
+    await page.route('**/auth/change-password', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: true, token: 'new-token-123', user: { name: 'Test User', email: 'tester_01@example.com' } }),
+      });
+    });
+    await page.locator('[onclick="openPwM()"]').click();
+    await page.fill('#pw-cur', 'OldPass123!');
+    await page.fill('#pw-new', 'NewPass123!');
+    await page.fill('#pw-new2', 'NewPass123!');
+    await page.click('#pw-save-btn');
+    await expect(page.locator('#pwmodal')).not.toHaveClass(/on/);
+    const token = await page.evaluate(() => sessionStorage.getItem('ee_token'));
+    expect(token).toBe('new-token-123');
+  });
+
 });

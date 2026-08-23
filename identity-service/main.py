@@ -40,6 +40,20 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 from pywebpush import webpush as pywebpush_send, WebPushException
+from webauthn import (
+    generate_authentication_options,
+    generate_registration_options,
+    verify_authentication_response,
+    verify_registration_response,
+)
+from webauthn.helpers import base64url_to_bytes, bytes_to_base64url, generate_challenge, options_to_json_dict
+from webauthn.helpers.structs import (
+    AuthenticatorSelectionCriteria,
+    AttestationConveyancePreference,
+    PublicKeyCredentialDescriptor,
+    ResidentKeyRequirement,
+    UserVerificationRequirement,
+)
 
 from storage import get_storage_backend
 
@@ -171,6 +185,20 @@ APP_URL = "https://kinlight.app"
 # This is the ONLY remaining F72b step; it absorbs F68 (verified domain) and unblocks F63.
 FROM_EMAIL = "Kinlight <hello@kinlight.app>"
 
+# F118: WebAuthn (passkey) configuration. The relying party is the frontend
+# origin (kinlight.app); the browser enforces these against the calling page,
+# and the backend re-validates them on every verify to prevent replay/cross-origin.
+RP_ID = "kinlight.app"
+RP_NAME = "Kinlight"
+EXPECTED_ORIGIN = "https://kinlight.app"
+WEBAUTHN_CHALLENGE_TTL_SECONDS = 300  # passkey ceremonies complete in seconds
+
+# F118: short-lived, in-memory challenge store for WebAuthn ceremonies.
+# Single-worker deployment (GCE e2-micro) — no DB round-trip needed for a
+# challenge that lives only ~5 minutes. challenge_id -> {challenge, userId, exp}
+_webauthn_challenges: dict = {}
+_webauthn_challenges_lock = threading.Lock()
+
 client = MongoClient(MONGO_URI) if MONGO_URI else None
 db = client["emergency_exit"] if client is not None else None
 users_col = db["users"] if db is not None else None
@@ -179,6 +207,8 @@ resets_col = db["password_resets"] if db is not None else None
 system_col = db["system"] if db is not None else None  # F93: single doc tracking pulse scanner health
 push_subs_col = db["push_subscriptions"] if db is not None else None  # F101: push notification subscriptions
 trusted_links_col = db["trusted_links"] if db is not None else None  # F115: single-use trusted-person magic links
+known_devices_col = db["known_devices"] if db is not None else None  # F117: recognized devices for new-sign-in alerts
+webauthn_creds_col = db["webauthn_credentials"] if db is not None else None  # F118: enrolled passkey credentials
 
 # F101: VAPID keypair for Web Push. Generated once and stored in env vars.
 # If not set, generate a new pair at startup and log it — copy to Railway env vars.
@@ -609,6 +639,8 @@ def clean_user(user: dict) -> dict:
         "hasWill":  user.get("hasWill", False),
         "isTester": user.get("isTester", False),
         "isAdmin":  user.get("isAdmin", False),
+        # F118: denormalized flag (maintained on passkey register/delete).
+        "hasPasskey": user.get("hasPasskey", False),
     }
 
 
@@ -636,6 +668,136 @@ def require_admin(current_user: dict) -> None:
     """Raise 403 if the current user does not have the isAdmin flag."""
     if not current_user.get("isAdmin", False):
         raise HTTPException(status_code=403, detail="Admin access required")
+
+
+# ─── F117: NEW-DEVICE SIGN-IN ALERTS ──────────────────────────────────────────
+
+def _device_label(user_agent: str) -> str:
+    """Return a short, human-readable device description from a User-Agent."""
+    ua = (user_agent or "")
+    if "iPhone" in ua:
+        return "iPhone"
+    if "iPad" in ua:
+        return "iPad"
+    if "Android" in ua:
+        return "Android device"
+    if "Macintosh" in ua or "Mac OS" in ua:
+        return "Mac"
+    if "Windows" in ua:
+        return "Windows PC"
+    if "Linux" in ua:
+        return "Linux device"
+    return "a new device"
+
+
+def send_new_device_email(user: dict, device_name: str, ip: str, user_agent: str, when) -> bool:
+    """F117: email the account holder when a sign-in happens on an unrecognized device."""
+    email = user.get("email", "")
+    if not email:
+        return False
+    name = (user.get("name", "").split()[0] or "there")
+    when_label = when.strftime("%-d %B %Y at %H:%M UTC") if hasattr(when, "strftime") else str(when)
+    label = device_name or _device_label(user_agent)
+
+    body = f"""Hi {name},
+
+A new sign-in to your Kinlight account was detected.
+
+Device: {label}
+Time: {when_label}
+IP address: {ip or "unknown"}
+
+If this was you, no action is needed — we've remembered this device.
+
+If this wasn't you, your account may be at risk. Sign in to Kinlight and reset your password right away:
+{APP_URL}
+
+As a reminder, your Kinlight vault holds sensitive information. We'll alert you every time a new device signs in.
+
+The Kinlight team
+"""
+    sent = _send_email(email, "New sign-in to your Kinlight account", body)
+    if sent:
+        logger.info(f"F117: new-device alert sent to {mask_email(email)}")
+    return sent
+
+
+def _notify_new_device(user: dict, label: str, ip: str, user_agent: str, now) -> None:
+    """F117: dispatch the new-device alert via email + push."""
+    send_new_device_email(user, label, ip, user_agent, now)
+    send_push_to_user(
+        str(user["_id"]),
+        "New sign-in detected",
+        f"Your Kinlight account was signed in on {label}. If this wasn't you, reset your password.",
+        tag="new-device",
+        require_interaction=True,
+    )
+
+
+def register_device_login(user: dict, device_id: str, device_name: str, request: Request) -> None:
+    """F117: record a login's device; alert the holder the first time a device is seen.
+
+    No-op when no device_id is supplied (older clients) or no DB is available.
+    The alert is dispatched on a daemon thread so it never delays login."""
+    if not device_id or known_devices_col is None:
+        return
+    user_id = user["_id"]
+    now = now_utc()
+    ip = get_client_ip(request) if request is not None else ""
+    user_agent = request.headers.get("User-Agent", "") if request is not None else ""
+
+    existing = known_devices_col.find_one({"userId": user_id, "deviceId": device_id})
+    if existing:
+        known_devices_col.update_one(
+            {"_id": existing["_id"]},
+            {"$set": {"lastSeenAt": now, "deviceName": device_name or existing.get("deviceName", "")}},
+        )
+        return
+
+    label = device_name or _device_label(user_agent)
+    known_devices_col.insert_one({
+        "userId":     user_id,
+        "deviceId":   device_id,
+        "deviceName": label,
+        "userAgent":  user_agent,
+        "ip":         ip,
+        "firstSeenAt": now,
+        "lastSeenAt":  now,
+    })
+
+    threading.Thread(target=_notify_new_device, args=(user, label, ip, user_agent, now), daemon=True).start()
+
+
+# ─── F118: PASSKEY (WEBAUTHN) HELPERS ─────────────────────────────────────────
+
+def _webauthn_store_challenge(challenge: bytes, user_id: Optional[str] = None) -> str:
+    """Store a challenge and return its id (used to correlate options → verify)."""
+    challenge_id = secrets.token_urlsafe(32)
+    with _webauthn_challenges_lock:
+        _webauthn_challenges[challenge_id] = {
+            "challenge": challenge,
+            "userId": user_id,
+            "exp": now_utc() + timedelta(seconds=WEBAUTHN_CHALLENGE_TTL_SECONDS),
+        }
+    return challenge_id
+
+
+def _webauthn_take_challenge(challenge_id: str) -> dict:
+    """Retrieve and delete a stored challenge; raises 400 if missing/expired."""
+    with _webauthn_challenges_lock:
+        entry = _webauthn_challenges.pop(challenge_id, None)
+    if entry is None:
+        raise HTTPException(status_code=400, detail="WebAuthn challenge not found or expired")
+    if now_utc() > entry["exp"]:
+        raise HTTPException(status_code=400, detail="WebAuthn challenge expired")
+    return entry
+
+
+def _webauthn_credential_id_bytes(credential_id) -> bytes:
+    """Coerce a credential id (bytes or base64url str) to bytes for storage."""
+    if isinstance(credential_id, bytes):
+        return credential_id
+    return base64.urlsafe_b64decode(credential_id + "=" * (-len(credential_id) % 4))
 
 
 # ─── CHECKIN WINDOW CALCULATIONS ─────────────────────────────────────────────
@@ -1421,6 +1583,11 @@ async def startup():
     # accounts can't share a login. Must run the email-migration script first
     # (duplicate emails would make this index fail to build).
     users_col.create_index([("email", ASCENDING)], unique=True)
+    # F117: recognized devices — fast lookup per user, unique per (user, device)
+    known_devices_col.create_index([("userId", ASCENDING), ("deviceId", ASCENDING)], unique=True)
+    # F118: passkey credentials — unique credential id, indexed per user
+    webauthn_creds_col.create_index([("credentialId", ASCENDING)], unique=True)
+    webauthn_creds_col.create_index([("userId", ASCENDING)])
     logger.info("Startup complete — indexes ensured")
 
 
@@ -1482,6 +1649,8 @@ def login(request: Request, body: dict):
     clear_login_failures(email)
     logger.info(f"Successful login for email: {mask_email(email)}")
     users_col.update_one({"_id": user["_id"]}, {"$set": {"lastLogin": now_utc()}})
+    # F117: record + alert on new-device sign-in (no-op if no deviceId supplied)
+    register_device_login(user, body.get("deviceId", ""), body.get("deviceName", ""), request)
     return {"ok": True, "token": create_token(str(user["_id"]), user), "user": clean_user(user)}
 
 
@@ -1516,6 +1685,40 @@ def update_me(body: dict, current_user: dict = Depends(get_current_user)):
     users_col.update_one({"_id": current_user["_id"]}, {"$set": updates})
     updated_user = users_col.find_one({"_id": current_user["_id"]})
     return {"ok": True, "user": clean_user(updated_user)}
+
+
+@app.post("/auth/change-password")
+def change_password(body: dict, current_user: dict = Depends(get_current_user)):
+    """F119: change the authenticated user's password (requires the current one).
+
+    Increments tokenVersion to revoke sessions on every other device, then issues
+    a fresh JWT so the current session stays signed in seamlessly."""
+    current_password = body.get("currentPassword", "")
+    new_password = body.get("newPassword", "")
+
+    if not current_password or not check_password(current_password, current_user.get("password", "")):
+        raise HTTPException(status_code=400, detail="Current password is incorrect.")
+
+    if not is_password_acceptable(new_password):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters, include a number or special character, and not be a commonly used password.",
+        )
+
+    if new_password == current_password:
+        raise HTTPException(status_code=400, detail="New password must be different from your current password.")
+
+    users_col.update_one(
+        {"_id": current_user["_id"]},
+        {"$set": {"password": hash_password(new_password)}, "$inc": {"tokenVersion": 1}},
+    )
+    updated_user = users_col.find_one({"_id": current_user["_id"]})
+    logger.info(f"F119: Password changed for {mask_email(current_user.get('email', str(current_user['_id'])))}")
+    return {
+        "ok": True,
+        "token": create_token(str(updated_user["_id"]), updated_user),
+        "user": clean_user(updated_user),
+    }
 
 
 @app.post("/auth/request-reset")
@@ -1580,6 +1783,213 @@ def reset_password(body: dict):
     if reset_user is not None:
         clear_login_failures(reset_user.get("email", ""))
     return {"ok": True, "message": "Password updated. You can now sign in."}
+
+
+# ─── F118: PASSKEY (WEBAUTHN) ENDPOINTS ───────────────────────────────────────
+
+@app.get("/auth/webauthn/register/options")
+def webauthn_register_options(current_user: dict = Depends(get_current_user)):
+    """F118: begin passkey registration. Requires auth — passkeys are added
+    from Settings after signing in with a password."""
+    user_id = str(current_user["_id"]).encode("utf-8")
+    user_name = current_user.get("email", "") or str(current_user["_id"])
+    user_display_name = current_user.get("name", "") or user_name
+
+    # Exclude already-enrolled credentials so the authenticator won't re-register
+    exclude = []
+    if webauthn_creds_col is not None:
+        for cred in webauthn_creds_col.find({"userId": current_user["_id"]}):
+            exclude.append(PublicKeyCredentialDescriptor(
+                id=_webauthn_credential_id_bytes(cred["credentialId"]),
+            ))
+
+    challenge = generate_challenge()
+    options = generate_registration_options(
+        rp_id=RP_ID,
+        rp_name=RP_NAME,
+        user_id=user_id,
+        user_name=user_name,
+        user_display_name=user_display_name,
+        challenge=challenge,
+        attestation=AttestationConveyancePreference.NONE,
+        authenticator_selection=AuthenticatorSelectionCriteria(
+            resident_key=ResidentKeyRequirement.REQUIRED,
+            user_verification=UserVerificationRequirement.PREFERRED,
+        ),
+        exclude_credentials=exclude or None,
+    )
+    challenge_id = _webauthn_store_challenge(challenge, str(current_user["_id"]))
+    return {"ok": True, "challengeId": challenge_id, "options": options_to_json_dict(options)}
+
+
+@app.post("/auth/webauthn/register/verify")
+def webauthn_register_verify(body: dict, current_user: dict = Depends(get_current_user)):
+    """F118: complete passkey registration and store the credential."""
+    if webauthn_creds_col is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    challenge_id = body.get("challengeId", "")
+    credential = body.get("credential")
+    if not challenge_id or not credential:
+        raise HTTPException(status_code=400, detail="Missing challengeId or credential")
+
+    entry = _webauthn_take_challenge(challenge_id)
+    if entry.get("userId") != str(current_user["_id"]):
+        raise HTTPException(status_code=400, detail="Challenge does not belong to this account")
+
+    try:
+        verified = verify_registration_response(
+            credential=credential,
+            expected_challenge=entry["challenge"],
+            expected_rp_id=RP_ID,
+            expected_origin=EXPECTED_ORIGIN,
+            require_user_verification=True,
+        )
+    except Exception as e:
+        logger.warning(f"F118: passkey registration verification failed: {e}")
+        raise HTTPException(status_code=400, detail="Passkey verification failed")
+
+    credential_id_b64 = bytes_to_base64url(verified.credential_id)
+    if webauthn_creds_col.find_one({"credentialId": credential_id_b64}):
+        raise HTTPException(status_code=400, detail="This passkey is already registered")
+
+    transports = []
+    if isinstance(credential, dict):
+        transports = credential.get("response", {}).get("transports") or credential.get("transports") or []
+
+    now = now_utc()
+    webauthn_creds_col.insert_one({
+        "userId":       current_user["_id"],
+        "credentialId": credential_id_b64,
+        "publicKey":    bytes_to_base64url(verified.credential_public_key),
+        "signCount":    verified.sign_count,
+        "transports":   list(transports),
+        "deviceName":   body.get("deviceName", ""),
+        "createdAt":    now,
+        "lastUsedAt":   None,
+    })
+    # F118: keep the denormalized hasPasskey flag in sync on the user doc
+    users_col.update_one({"_id": current_user["_id"]}, {"$set": {"hasPasskey": True}})
+    logger.info(f"F118: passkey registered for {mask_email(current_user.get('email', str(current_user['_id'])))}")
+    return {"ok": True}
+
+
+@app.post("/auth/webauthn/login/options")
+def webauthn_login_options(body: dict):
+    """F118: begin passkey sign-in. If an email is supplied and known, narrow to
+    that account's credentials; otherwise the browser offers discoverable passkeys."""
+    email = (body.get("email") or "").strip().lower()
+    allow_credentials = None
+    known_user_id = None
+
+    if email and webauthn_creds_col is not None:
+        user = users_col.find_one({"email": email})
+        if user:
+            known_user_id = str(user["_id"])
+            creds = list(webauthn_creds_col.find({"userId": user["_id"]}))
+            if creds:
+                allow_credentials = [
+                    PublicKeyCredentialDescriptor(id=_webauthn_credential_id_bytes(c["credentialId"]))
+                    for c in creds
+                ]
+
+    challenge = generate_challenge()
+    options = generate_authentication_options(
+        rp_id=RP_ID,
+        challenge=challenge,
+        allow_credentials=allow_credentials,
+        user_verification=UserVerificationRequirement.PREFERRED,
+    )
+    challenge_id = _webauthn_store_challenge(challenge, known_user_id)
+    return {"ok": True, "challengeId": challenge_id, "options": options_to_json_dict(options)}
+
+
+@app.post("/auth/webauthn/login/verify")
+def webauthn_login_verify(request: Request, body: dict):
+    """F118: verify a passkey assertion and issue the standard JWT."""
+    if webauthn_creds_col is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    challenge_id = body.get("challengeId", "")
+    credential = body.get("credential")
+    if not challenge_id or not credential:
+        raise HTTPException(status_code=400, detail="Missing challengeId or credential")
+
+    entry = _webauthn_take_challenge(challenge_id)
+
+    credential_id = (credential or {}).get("id")
+    if not credential_id:
+        raise HTTPException(status_code=400, detail="Missing credential id")
+
+    stored = webauthn_creds_col.find_one({"credentialId": credential_id})
+    if not stored:
+        raise HTTPException(status_code=401, detail="Passkey not recognized")
+
+    user = users_col.find_one({"_id": stored["userId"]})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    # If the challenge was scoped to a known account, the assertion must match it.
+    if entry.get("userId") and entry["userId"] != str(user["_id"]):
+        raise HTTPException(status_code=401, detail="Passkey does not match this account")
+
+    try:
+        verified = verify_authentication_response(
+            credential=credential,
+            expected_challenge=entry["challenge"],
+            expected_rp_id=RP_ID,
+            expected_origin=EXPECTED_ORIGIN,
+            credential_public_key=base64url_to_bytes(stored["publicKey"]),
+            credential_current_sign_count=stored.get("signCount", 0),
+            require_user_verification=True,
+        )
+    except Exception as e:
+        logger.warning(f"F118: passkey login verification failed: {e}")
+        raise HTTPException(status_code=401, detail="Passkey verification failed")
+
+    webauthn_creds_col.update_one(
+        {"_id": stored["_id"]},
+        {"$set": {"signCount": verified.new_sign_count, "lastUsedAt": now_utc()}},
+    )
+
+    logger.info(f"F118: successful passkey login for {mask_email(user.get('email', str(user['_id'])))}")
+    register_device_login(user, body.get("deviceId", ""), body.get("deviceName", ""), request)
+    return {"ok": True, "token": create_token(str(user["_id"]), user), "user": clean_user(user)}
+
+
+@app.get("/auth/webauthn/credentials")
+def webauthn_list_credentials(current_user: dict = Depends(get_current_user)):
+    """F118: list enrolled passkeys (metadata only — no key material)."""
+    if webauthn_creds_col is None:
+        return {"ok": True, "credentials": []}
+    creds = list(webauthn_creds_col.find({"userId": current_user["_id"]}).sort("createdAt", 1))
+    return {
+        "ok": True,
+        "credentials": [
+            {
+                "id": c["credentialId"],
+                "deviceName": c.get("deviceName", ""),
+                "createdAt": c.get("createdAt").isoformat() if c.get("createdAt") else None,
+                "lastUsedAt": c.get("lastUsedAt").isoformat() if c.get("lastUsedAt") else None,
+            }
+            for c in creds
+        ],
+    }
+
+
+@app.delete("/auth/webauthn/credentials/{credential_id}")
+def webauthn_delete_credential(credential_id: str, current_user: dict = Depends(get_current_user)):
+    """F118: remove an enrolled passkey (scoped to the current user)."""
+    if webauthn_creds_col is None:
+        return {"ok": True}
+    result = webauthn_creds_col.delete_one({"userId": current_user["_id"], "credentialId": credential_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Passkey not found")
+    # F118: keep the denormalized hasPasskey flag in sync on the user doc
+    remaining = webauthn_creds_col.count_documents({"userId": current_user["_id"]})
+    users_col.update_one({"_id": current_user["_id"]}, {"$set": {"hasPasskey": remaining > 0}})
+    logger.info(f"F118: passkey removed for {mask_email(current_user.get('email', str(current_user['_id'])))}")
+    return {"ok": True}
 
 
 @app.get("/admin/testers")

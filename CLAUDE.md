@@ -313,6 +313,8 @@ The backend is on Google Compute Engine free tier (`api.kinlight.app`) — an e2
 | GET | `/health` | No | Confirm server is running |
 | POST | `/auth/login` | No | Login with username + password, returns JWT token |
 | GET | `/auth/me` | Yes | Get current user's profile |
+| PATCH | `/auth/me` | Yes | Update name/email |
+| POST | `/auth/change-password` | Yes | F119: Change password (requires current password, revokes other sessions, returns fresh JWT) |
 | GET | `/admin/testers` | Yes | List all tester accounts |
 | POST | `/vault/sync` | Yes | Store vault using structured MongoDB schema (F41) |
 | GET | `/vault` | Yes | Return vault blob to frontend on login (F41) |
@@ -324,6 +326,12 @@ The backend is on Google Compute Engine free tier (`api.kinlight.app`) — an e2
 | GET | `/push/key` | No | F101: Return VAPID public key for Web Push subscription |
 | POST | `/push/subscribe` | Yes | F101: Store a push notification subscription for the current user |
 | POST | `/push/unsubscribe` | Yes | F101: Remove a push notification subscription |
+| GET | `/auth/webauthn/register/options` | Yes | F118: Start passkey registration (returns challenge + creation options) |
+| POST | `/auth/webauthn/register/verify` | Yes | F118: Verify passkey attestation, store credential |
+| POST | `/auth/webauthn/login/options` | No | F118: Start passkey sign-in (discoverable credential) |
+| POST | `/auth/webauthn/login/verify` | No | F118: Verify passkey assertion, return JWT |
+| GET | `/auth/webauthn/credentials` | Yes | F118: List enrolled passkeys (metadata only) |
+| DELETE | `/auth/webauthn/credentials/{credential_id}` | Yes | F118: Remove an enrolled passkey |
 
 ### Environment Variables (set in Railway dashboard, never committed)
 ```
@@ -403,10 +411,17 @@ ee_onboarded: 'true'   ← set on first dismissal of F44 explainer card. Persist
 ### MongoDB users collection
 ```
 _id, username, password (bcrypt hash), name, ageGroup, hasWill,
-notes, isTester, isAdmin, createdAt, lastLogin
+notes, isTester, isAdmin, hasPasskey, tokenVersion, failedLoginCount,
+lockedUntil, createdAt, lastLogin
 ```
 **Tester accounts:** tester_01 through tester_06. All passwords updated to bcrypt hash of `Benny#07`. No `isAdmin` field (defaults to `false`).
 **Admin account:** `anggi` — `isTester: false`, `isAdmin: true`. Added F77. ⚠️ Currently shares the same temporary password as testers (`Benny#07`) — change before launch.
+
+### Additional collections (F115/F117/F118)
+- `trusted_links` — single-use trusted-person magic links (F115)
+- `push_subscriptions` — Web Push subscriptions (F101)
+- `known_devices` — recognized devices for new-sign-in alerts; unique `{userId, deviceId}` (F117)
+- `webauthn_credentials` — enrolled passkeys; unique `credentialId`, indexed `userId` (F118)
 
 ---
 
@@ -414,7 +429,7 @@ notes, isTester, isAdmin, createdAt, lastLogin
 
 **File:** `identity-service/test_main.py`
 **Run:** `python3 -m pytest test_main.py -v`
-**Expected:** 228 passed
+**Expected:** 304 passed
 
 ### Coverage by feature
 
