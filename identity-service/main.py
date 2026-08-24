@@ -26,7 +26,7 @@ from bson import ObjectId
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from fastapi import Body, Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
+from fastapi import Body, Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -57,6 +57,28 @@ from webauthn.helpers.structs import (
 
 from storage import get_storage_backend
 
+# ─── KINLIGHT HELPERS (pure, side-effect-free) ────────────────────────────────
+# Extracted into the kinlight/ package for isolation and testability.
+# Re-exported here so the app's existing `from main import ...` and
+# `patch("main.X")` call sites keep resolving unchanged.
+from kinlight.timeutil import ms_to_dt, dt_to_ms, now_utc, ensure_utc
+from kinlight.logging_utils import mask_email, _JsonFormatter
+from kinlight.pulse_logic import (
+    WARNING_DAYS,
+    CONTACT_NOTIFY_AFTER_DAYS,
+    _interval_days,
+    is_overdue,
+    is_reminder_due,
+    should_send_warning,
+    should_notify_contacts,
+)
+from kinlight.files_safety import (
+    ALLOWED_EXTENSIONS,
+    _safe_filename,
+    _validate_filename,
+    _validate_magic_bytes,
+)
+
 
 # ─── APP & CONFIG ─────────────────────────────────────────────────────────────
 
@@ -65,34 +87,7 @@ from storage import get_storage_backend
 # Replace all print() calls with stdlib logging. JSON-formatted so Railway's
 # log dashboard can filter/search by level, event, and timestamp.
 # PII (email addresses) is masked in all log output via mask_email().
-
-_EMAIL_RE = re_mod.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
-
-
-def mask_email(value: str) -> str:
-    """Mask email addresses in a string: alice@example.com -> a***@example.com"""
-    def _mask(m: re_mod.Match) -> str:
-        email = m.group(0)
-        local, domain = email.split("@", 1)
-        if len(local) <= 1:
-            return f"{local}***@{domain}"
-        return f"{local[0]}***@{domain}"
-    return _EMAIL_RE.sub(_mask, value)
-
-
-class _JsonFormatter(logging.Formatter):
-    """Emit each log record as a single JSON line with PII masking."""
-    def format(self, record: logging.LogRecord) -> str:
-        import json as _json
-        msg = record.getMessage()
-        masked = mask_email(msg)
-        entry = {
-            "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
-            "level": record.levelname,
-            "message": masked,
-        }
-        return _json.dumps(entry)
-
+# mask_email() and _JsonFormatter now live in kinlight/logging_utils.py.
 
 _handler = logging.StreamHandler()          # writes to stdout
 _handler.setFormatter(_JsonFormatter())
@@ -113,6 +108,7 @@ logger.propagate = False                    # avoid duplicate output
 # appended, so the leftmost entry is trustworthy for rate-limiting purposes
 # (this is not used for any authorization decision, only throttling).
 def get_client_ip(request: Request) -> str:
+    """Resolve the real client IP, trusting the leftmost X-Forwarded-For entry."""
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
         return forwarded.split(",")[0].strip()
@@ -251,9 +247,8 @@ TRUSTED_LINK_TTL_MINUTES = 7 * 24 * 60  # magic-link email expiry (7 days, singl
 TRUSTED_JWT_EXPIRY_HOURS = 24           # scoped trusted JWT lifetime after redemption
 
 # F64-2: Warning days for ping_then_notify protocol
-# Warnings fire on these days of overdue; contacts notified on day 3+
-WARNING_DAYS = [1, 2]
-CONTACT_NOTIFY_AFTER_DAYS = 3
+# WARNING_DAYS / CONTACT_NOTIFY_AFTER_DAYS now live in kinlight/pulse_logic.py
+# (re-exported above).
 
 # F86: Account lockout after repeated failed logins
 MAX_LOGIN_ATTEMPTS = 5
@@ -300,38 +295,13 @@ ALLOWED_CONTENT_TYPES = {
     "text/plain",
     "application/zip",
 }
-ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".doc", ".docx", ".txt", ".zip"}
-
 # Storage backend — pluggable (GridFS by default; set STORAGE_BACKEND=s3 to swap)
 _storage_backend = get_storage_backend(db) if db is not None else None
 
 
 
 # ─── TIMESTAMP HELPERS ────────────────────────────────────────────────────────
-
-def ms_to_dt(ms: Optional[int]) -> Optional[datetime]:
-    """Convert JS millisecond timestamp to Python datetime (UTC)."""
-    if ms is None:
-        return None
-    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
-
-
-def dt_to_ms(dt: Optional[datetime]) -> Optional[int]:
-    """Convert Python datetime to JS millisecond timestamp."""
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return int(dt.timestamp() * 1000)
-
-
-def now_utc() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def ensure_utc(dt: datetime) -> datetime:
-    """Attach UTC timezone if naive."""
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+# ms_to_dt / dt_to_ms / now_utc / ensure_utc now live in kinlight/timeutil.py.
 
 
 # ─── F04: VAULT CONTENT ENCRYPTION ───────────────────────────────────────────
@@ -461,14 +431,17 @@ def reconstruct_vault_blob(doc: dict) -> dict:
 # ─── AUTH HELPERS ─────────────────────────────────────────────────────────────
 
 def hash_password(password: str) -> str:
+    """Hash a plaintext password with bcrypt (salted)."""
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
 
 def check_password(password: str, hashed: str) -> bool:
+    """Verify a plaintext password against a stored bcrypt hash."""
     return bcrypt.checkpw(password.encode(), hashed.encode())
 
 
 def create_token(user_id: str, user: Optional[dict] = None) -> str:
+    """Issue a JWT carrying sub, iat, exp, and the user's tokenVersion."""
     payload = {
         "sub": user_id,
         "iat": now_utc(),
@@ -648,6 +621,7 @@ def clean_user(user: dict) -> dict:
 
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    """Validate the bearer JWT and return the matching user document."""
     if not credentials:
         raise HTTPException(status_code=401, detail="Missing token")
     token = credentials.credentials
@@ -804,77 +778,13 @@ def _webauthn_credential_id_bytes(credential_id) -> bytes:
 
 
 # ─── CHECKIN WINDOW CALCULATIONS ─────────────────────────────────────────────
-
-def _interval_days(vault_doc: dict) -> int:
-    freq = vault_doc.get("checkInFrequency", 2)
-    unit = vault_doc.get("checkInUnit", "months")
-    return freq * 30 if unit == "months" else freq * 7
-
-
-def is_overdue(vault_doc: dict) -> tuple[bool, int]:
-    """
-    Returns (is_overdue, days_overdue).
-    Grace period starts after the check-in window expires.
-    """
-    last_checkin = vault_doc.get("lastCheckin")
-    if not last_checkin:
-        return False, 0
-
-    last_checkin = ensure_utc(last_checkin)
-    grace_days = vault_doc.get("gracePeriodDays", 7)
-    grace_end = last_checkin + timedelta(days=_interval_days(vault_doc) + grace_days)
-    now = now_utc()
-
-    if now > grace_end:
-        return True, (now - grace_end).days
-    return False, 0
-
-
-def is_reminder_due(vault_doc: dict) -> bool:
-    """
-    Returns True when the vault holder should receive a check-in reminder.
-
-    Mirrors the frontend 25% rule: fires when time remaining <= 25% of the
-    interval, but only once per cycle (guarded by the reminderSent flag).
-    Does NOT fire if the vault is already overdue.
-    """
-    last_checkin = vault_doc.get("lastCheckin")
-    if not last_checkin or vault_doc.get("reminderSent", False):
-        return False
-
-    last_checkin = ensure_utc(last_checkin)
-    interval = _interval_days(vault_doc)
-    threshold = max(7, round(interval * 0.25))
-    days_remaining = (last_checkin + timedelta(days=interval) - now_utc()).days
-
-    return 0 <= days_remaining <= threshold
+# _interval_days / is_overdue / is_reminder_due now live in
+# kinlight/pulse_logic.py (re-exported above).
 
 
 # ─── F64-2: WARNING HELPERS ───────────────────────────────────────────────────
-
-def should_send_warning(vault_doc: dict, days_overdue: int) -> bool:
-    """
-    Returns True if a warning email should be sent to the holder today.
-    Only applies to ping_then_notify protocol, and only on WARNING_DAYS (1, 2).
-    Guards against re-sending on the same day via warningSentDays list.
-    """
-    if vault_doc.get("notifyProto", "ping_then_notify") != "ping_then_notify":
-        return False
-    if days_overdue not in WARNING_DAYS:
-        return False
-    already_sent = vault_doc.get("warningSentDays", [])
-    return days_overdue not in already_sent
-
-
-def should_notify_contacts(vault_doc: dict, days_overdue: int) -> bool:
-    """
-    For ping_then_notify: contacts notified only after CONTACT_NOTIFY_AFTER_DAYS (3).
-    For all other protocols: existing behaviour (notify immediately / escalate).
-    """
-    proto = vault_doc.get("notifyProto", "ping_then_notify")
-    if proto == "ping_then_notify":
-        return days_overdue >= CONTACT_NOTIFY_AFTER_DAYS
-    return True
+# should_send_warning / should_notify_contacts now live in
+# kinlight/pulse_logic.py (re-exported above).
 
 
 # ─── NOTIFICATION QUEUE ───────────────────────────────────────────────────────
@@ -1285,7 +1195,7 @@ def generate_pdf_for_contact(contact: dict, vault_doc: dict, holder_name: str = 
         "section":  ParagraphStyle("Sc", parent=base["Heading2"], fontSize=12, spaceAfter=6,  textColor=colors.HexColor("#2e2b26")),
     }
 
-    def hr():
+    def hr() -> HRFlowable:
         return HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#e0e0e0"))
 
     def esc(text: str) -> str:
@@ -1473,7 +1383,7 @@ def _handle_trusted_notification(vault_doc: dict, user: dict, trusted: dict,
     return True
 
 
-def run_pulse_scan():
+def run_pulse_scan() -> None:
     """
     Hourly background job with three responsibilities:
     1. F64-2 Warnings — emails holder on day 1 and day 2 of overdue window (ping_then_notify only).
@@ -1573,7 +1483,7 @@ scheduler.start()
 # ─── API ROUTES ───────────────────────────────────────────────────────────────
 
 @app.on_event("startup")
-async def startup():
+async def startup() -> None:
     """Create MongoDB indexes on boot. Safe to re-run — skipped if already exist."""
     vaults_col.create_index([("userId", ASCENDING)], unique=True)
     vaults_col.create_index([("lastCheckin", ASCENDING)])
@@ -1628,7 +1538,8 @@ def health():
 
 @app.post("/auth/login")
 @limiter.limit("5/minute")
-def login(request: Request, body: dict):
+def login(request: Request, body: dict) -> dict:
+    """Authenticate by email + password; returns a fresh JWT and user profile."""
     email = body.get("email", "").strip().lower()
     password = body.get("password", "")
 
@@ -1658,12 +1569,13 @@ def login(request: Request, body: dict):
 
 
 @app.get("/auth/me")
-def me(current_user: dict = Depends(get_current_user)):
+def me(current_user: dict = Depends(get_current_user)) -> dict:
+    """Return the authenticated user's profile."""
     return {"ok": True, "user": clean_user(current_user)}
 
 
 @app.patch("/auth/me")
-def update_me(body: dict, current_user: dict = Depends(get_current_user)):
+def update_me(body: dict, current_user: dict = Depends(get_current_user)) -> dict:
     """
     Update the authenticated user's profile. Accepts optional name and email.
     Returns the updated user object. Empty strings are treated as no change.
@@ -1698,7 +1610,7 @@ def update_me(body: dict, current_user: dict = Depends(get_current_user)):
 
 @app.post("/auth/change-password")
 @limiter.limit("5/minute", key_func=get_user_or_ip)
-def change_password(request: Request, body: dict, current_user: dict = Depends(get_current_user)):
+def change_password(request: Request, body: dict, current_user: dict = Depends(get_current_user)) -> dict:
     """F119: change the authenticated user's password (requires the current one).
 
     Increments tokenVersion to revoke sessions on every other device, then issues
@@ -2004,14 +1916,16 @@ def webauthn_delete_credential(credential_id: str, current_user: dict = Depends(
 
 
 @app.get("/admin/testers")
-def list_testers(current_user: dict = Depends(get_current_user)):
+def list_testers(current_user: dict = Depends(get_current_user)) -> dict:
+    """List all tester accounts (admin only)."""
     require_admin(current_user)
     testers = list(users_col.find({"isTester": True}))
     return {"ok": True, "testers": [clean_user(t) for t in testers]}
 
 
 @app.post("/vault/sync")
-def vault_sync(body: dict, current_user: dict = Depends(get_current_user)):
+def vault_sync(body: dict, current_user: dict = Depends(get_current_user)) -> dict:
+    """Persist the frontend vault blob (encrypted) to MongoDB."""
     vault_blob = body.get("vault", {})
 
     # F96: validate payload limits
@@ -2082,7 +1996,8 @@ def vault_sync(body: dict, current_user: dict = Depends(get_current_user)):
 
 
 @app.get("/vault")
-def vault_get(current_user: dict = Depends(get_current_user)):
+def vault_get(current_user: dict = Depends(get_current_user)) -> dict:
+    """Return the decrypted vault blob for the authenticated user."""
     doc = vaults_col.find_one({"userId": current_user["_id"]})
     if not doc:
         return {"ok": True, "vault": None}
@@ -2593,89 +2508,9 @@ def _file_owns(file_id: str, current_user: dict) -> bool:
     return owner == str(current_user["_id"])
 
 
-def _validate_filename(filename: str) -> bool:
-    """Reject filenames that look like traversal or have dangerous extensions."""
-    if not filename:
-        return False
-    if ".." in filename or "/" in filename or "\\" in filename:
-        return False
-    lower = filename.lower()
-    for ext in ALLOWED_EXTENSIONS:
-        if lower.endswith(ext):
-            return True
-    return False
-
-
-def _safe_filename(name: str, fallback: str = "file") -> str:
-    """F119-s: sanitize a user-controlled name for use in a Content-Disposition
-    header or a ZIP entry name. Strips CR/LF (header-injection) and quotes,
-    collapses any path separators, and falls back if nothing safe remains."""
-    if not name:
-        return fallback
-    cleaned = (
-        name.replace("\r", "").replace("\n", "")
-            .replace('"', "").replace("'", "")
-            .replace("/", "_").replace("\\", "_")
-            .replace("..", "_")
-    ).strip()
-    return cleaned or fallback
-
-
-# File-type magic byte signatures (first bytes of each supported format).
-# Tuple: (bytes to match, description)
-_MAGIC_SIGNATURES = [
-    # PDF
-    (b"%PDF-", "PDF"),
-    # JPEG
-    (b"\xFF\xD8\xFF", "JPEG"),
-    # PNG
-    (b"\x89PNG\r\n\x1a\n", "PNG"),
-    # WebP — RIFF container with WEBP subtype at offset 8
-    # (check offset 8–11 only after confirming RIFF header)
-    # ZIP / Office Open XML (DOCX, XLSX) / generic ZIP
-    (b"PK\x03\x04", "ZIP/DOCX"),
-    # OLE Compound Document (old-format DOC, XLS)
-    (b"\xD0\xCF\x11\xE0", "DOC"),
-]
-
-
-def _validate_magic_bytes(data: bytes, claimed_type: str) -> bool:
-    """
-    Validate that the first bytes of the file match the claimed content type.
-    Uses hardcoded magic byte signatures — no external library dependency.
-
-    TXT files are always accepted (text has no reliable magic bytes).
-    """
-    if len(data) < 4:
-        return False  # too small to identify
-
-    if claimed_type == "text/plain":
-        return True  # text files have no reliable magic bytes
-
-    if claimed_type == "application/pdf":
-        return data[:5] == b"%PDF-"
-
-    if claimed_type in ("image/jpeg",):
-        return data[:3] == b"\xFF\xD8\xFF"
-
-    if claimed_type in ("image/png",):
-        return data[:8] == b"\x89PNG\r\n\x1a\n"
-
-    if claimed_type in ("image/webp",):
-        # WebP: RIFF header at 0–3, WEBP at 8–11
-        return (data[:4] == b"RIFF" and len(data) >= 12 and
-                data[8:12] == b"WEBP")
-
-    if claimed_type in ("application/msword",
-                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"):
-        # OLE compound (old .doc) or ZIP-based (.docx)
-        return (data[:4] == b"\xD0\xCF\x11\xE0" or  # OLE2
-                data[:4] == b"PK\x03\x04")            # ZIP-based Office Open XML
-
-    if claimed_type in ("application/zip",):
-        return data[:4] == b"PK\x03\x04"
-
-    return False
+# _validate_filename / _safe_filename / _validate_magic_bytes now live in
+# kinlight/files_safety.py (re-exported above). The old _MAGIC_SIGNATURES list
+# was dead code (the checks are inlined) and has been removed.
 
 
 @app.post("/files/upload")
