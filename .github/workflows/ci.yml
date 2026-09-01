@@ -190,11 +190,6 @@ jobs:
               --read-only \
               --tmpfs /tmp \
               -e PORT=8001 \
-              -e MONGO_URI='${{ secrets.MONGO_URI }}' \
-              -e JWT_SECRET='${{ secrets.JWT_SECRET }}' \
-              -e RESEND_API_KEY='${{ secrets.RESEND_API_KEY }}' \
-              -e VAULT_ENCRYPTION_KEY='${{ secrets.VAULT_ENCRYPTION_KEY }}' \
-              -e VAPID_PRIVATE_KEY='${{ secrets.VAPID_PRIVATE_KEY }}' \
-              -e VAPID_PUBLIC_KEY='${{ secrets.VAPID_PUBLIC_KEY }}' \
+              -e GCP_PROJECT_ID='${{ secrets.GCP_PROJECT_ID }}' \
               kinlight-api
             docker image prune -af --filter "until=24h"

@@ -6,6 +6,7 @@ Expected: 228 passed
 
 import logging
 import json
+import os
 import pytest
 import jwt
 from datetime import datetime, timezone, timedelta
@@ -1650,6 +1651,88 @@ class TestDecryptContent:
         truncated = base64.b64encode(raw[:10]).decode("ascii")
         with pytest.raises(Exception):
             decrypt_content(truncated)
+
+
+# ─── F122: GCP SECRET MANAGER LOADER ─────────────────────────────────────────
+
+class TestSecretManagerLoader:
+    """Secret Manager startup loader — GCP_PROJECT_ID gating and env-var precedence."""
+
+    def test_noop_without_project(self, monkeypatch):
+        """Loader does nothing (no network) when GCP_PROJECT_ID is unset."""
+        from main import _load_secrets_from_secret_manager
+        monkeypatch.setattr("main.GCP_PROJECT_ID", "")
+        monkeypatch.setenv("VAULT_ENCRYPTION_KEY", "env-key")
+        with patch("main.requests.get") as mock_get:
+            _load_secrets_from_secret_manager()
+        mock_get.assert_not_called()
+        assert os.environ["VAULT_ENCRYPTION_KEY"] == "env-key"
+
+    def test_existing_env_var_wins(self, monkeypatch):
+        """A var already in the environment is never fetched/overwritten."""
+        from main import _load_secrets_from_secret_manager
+        monkeypatch.setattr("main.GCP_PROJECT_ID", "test-project")
+        monkeypatch.setenv("VAULT_ENCRYPTION_KEY", "env-key")
+        with patch("main._fetch_secret_manager_token", return_value="tok"):
+            with patch("main._fetch_secret") as mock_fetch:
+                _load_secrets_from_secret_manager()
+        assert os.environ["VAULT_ENCRYPTION_KEY"] == "env-key"
+        fetched_names = [call[0][2] for call in mock_fetch.call_args_list]
+        assert "kinlight-vault-encryption-key" not in fetched_names
+
+    def test_populates_missing_var(self, monkeypatch):
+        """A missing var is fetched from Secret Manager and set in os.environ."""
+        from main import _load_secrets_from_secret_manager
+        monkeypatch.setattr("main.GCP_PROJECT_ID", "test-project")
+        monkeypatch.delenv("RESEND_API_KEY", raising=False)
+
+        def fake_fetch(project, token, secret_name):
+            return "resend-secret" if secret_name == "kinlight-resend-api-key" else "other"
+
+        with patch("main._fetch_secret_manager_token", return_value="tok"):
+            with patch("main._fetch_secret", side_effect=fake_fetch):
+                _load_secrets_from_secret_manager()
+        assert os.environ["RESEND_API_KEY"] == "resend-secret"
+
+    def test_token_fetch_failure_is_graceful(self, monkeypatch):
+        """A failed token fetch logs a warning and does not raise."""
+        from main import _load_secrets_from_secret_manager
+        monkeypatch.setattr("main.GCP_PROJECT_ID", "test-project")
+        with patch("main._fetch_secret_manager_token", side_effect=Exception("boom")):
+            _load_secrets_from_secret_manager()
+
+    def test_partial_secret_failure_continues(self, monkeypatch):
+        """One secret failing to load does not abort the others."""
+        from main import _load_secrets_from_secret_manager
+        monkeypatch.setattr("main.GCP_PROJECT_ID", "test-project")
+        monkeypatch.delenv("RESEND_API_KEY", raising=False)
+
+        def fake_fetch(project, token, secret_name):
+            if secret_name == "kinlight-resend-api-key":
+                raise Exception("boom")
+            return "ok"
+
+        with patch("main._fetch_secret_manager_token", return_value="tok"):
+            with patch("main._fetch_secret", side_effect=fake_fetch):
+                _load_secrets_from_secret_manager()
+        assert os.environ.get("RESEND_API_KEY") is None
+
+    def test_fetch_token_returns_access_token(self):
+        """_fetch_secret_manager_token reads access_token from the metadata response."""
+        from main import _fetch_secret_manager_token
+        with patch("main.requests.get") as mock_get:
+            mock_get.return_value = MagicMock(json=lambda: {"access_token": "abc123"})
+            assert _fetch_secret_manager_token() == "abc123"
+        mock_get.assert_called_once()
+
+    def test_fetch_secret_base64_decodes_payload(self):
+        """_fetch_secret base64-decodes payload.data."""
+        import base64
+        from main import _fetch_secret
+        encoded = base64.b64encode(b"my-secret-value").decode()
+        with patch("main.requests.get") as mock_get:
+            mock_get.return_value = MagicMock(json=lambda: {"payload": {"data": encoded}})
+            assert _fetch_secret("proj", "tok", "kinlight-jwt-secret") == "my-secret-value"
 
 
 class TestReconstructWithEncryption:

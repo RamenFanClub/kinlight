@@ -2,8 +2,8 @@
 
 ## Architecture Decision Record (ADR)
 
-**Status:** Proposed — awaiting confirmation before implementation
-**Date:** June 2026
+**Status:** Accepted — implemented June 2026; key-management hardening (Secret Manager, F121–F128) August 2026
+**Date:** June 2026 (updated August 2026)
 **Feature:** F04 — Data encrypted at rest and in transit
 
 ---
@@ -135,9 +135,24 @@ The `_get_content_or_legacy()` helper already handles old vs new vault schemas. 
 
 ## What This Does NOT Cover (Future Work)
 
-- **MongoDB CSFLE** (Client-Side Field Level Encryption) — MongoDB's built-in feature where encryption/decryption happens in the MongoDB driver itself, with keys managed by a KMS (Key Management Service like AWS KMS or Azure Key Vault). This is stronger than application-level encryption because the key never touches the application code. Can be adopted later without changing the API or frontend.
-- **Key rotation** — changing the encryption key periodically. Requires re-encrypting all vaults with the new key. Should be built before launch but is not part of this first implementation.
-- **Per-user keys** — each user having their own encryption key (derived from their password). Stronger isolation but adds complexity around password resets (changing password = re-encrypting vault). Future consideration.
+- **MongoDB CSFLE (rejected)** — MongoDB's Client-Side Field Level Encryption was considered and **declined**. Its headline benefit (the database/Atlas admin never sees plaintext) is already delivered by the application-level encryption above; the DB only ever stores ciphertext. Its key-management benefit (KMS, IAM, audit) is now achieved far more simply via **GCP Secret Manager** (see below), without the `mongocrypt` binary, a KMS to operate, or per-operation driver changes. CSFLE is therefore unnecessary complexity for Kinlight's threat model.
+- **Per-user keys** — each user having their own encryption key (derived from their password) for cross-user breach isolation. Deferred: not needed at current single-digit-user scale. If adopted later, envelope encryption (per-user DEK wrapped by a master key in Secret Manager) is the recommended middle ground — simpler than CSFLE, stronger than a single key. Note: per-user keys would re-introduce the password-reset complexity (changing password = re-encrypting vault).
+
+## Key Management (Secret Manager, F121–F128)
+
+The `VAULT_ENCRYPTION_KEY` (and all other runtime secrets — `MONGO_URI`, `JWT_SECRET`, `RESEND_API_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_PUBLIC_KEY`) are stored in **GCP Secret Manager**, not in GitHub Secrets, the CI deploy script, or `docker run` argv. The application fetches them at startup via the Secret Manager REST API, authenticating with the GCE VM's attached service account (instance metadata server token). Existing environment variables always take precedence — preserving a manual-override and rollback path.
+
+**What this buys (key-management hardening, not a new crypto boundary):**
+
+- No plaintext secrets in GitHub Secrets, CI logs, the deploy script, or `docker run` process argv (removing the `ps`/shell-history/`docker inspect` exposure).
+- IAM-scoped access (`roles/secretmanager.secretAccessor` on the specific secrets only) plus access audit logs and versioning.
+- Centralised rotation story.
+
+**Honest limitation (unchanged from the core F04 threat model):** any process on the VM — including a compromised container — can reach the metadata server and fetch the same service-account token, and thus the same secrets. Secret Manager improves *where the key lives and who is audited*, but does not protect against a fully compromised server. Only contact-held E2EE would, which is incompatible with the dead-man's-switch.
+
+**Rotation cadence (F128):** rotate the key (a) immediately on any suspected exposure, and (b) at least annually as routine hygiene. Use `identity-service/scripts/rotate-key.py` (idempotent; see `docs/gce-deployment-guide.md`). After rotation, update the Secret Manager secret value, restart the server, and run a fresh backup.
+
+
 
 ---
 
@@ -167,7 +182,8 @@ Transit: HTTPS (done). Atlas disk encryption (done).
 server-side using `VAULT_ENCRYPTION_KEY` env var before MongoDB storage.
 Scheduling fields remain plaintext for pulse scanner queries.
 Auto-migration: detects plaintext vs encrypted on read; always writes encrypted.
-Future: MongoDB CSFLE, key rotation, per-user keys. |
+Key management: secrets in GCP Secret Manager (F121–F128). Key rotation (F109).
+Future: per-user keys (deferred). CSFLE rejected. |
 ```
 
 ---

@@ -165,12 +165,88 @@ async def add_security_headers(request, call_next):
     return response
 
 
+# ─── F122: GCP SECRET MANAGER LOADER ─────────────────────────────────────────
+#
+# Fetches runtime secrets from GCP Secret Manager when running on the GCE VM,
+# so no plaintext secrets live in GitHub Secrets, the CI deploy script, or
+# `docker run` argv. Authenticates via the VM's attached service account using
+# the instance metadata server (no key material shipped to CI).
+#
+# Gating: the loader only runs when GCP_PROJECT_ID is set (set in `docker run`
+# for prod; absent in local dev and CI, which fall through to plain env vars).
+# Existing env vars always win — this preserves a manual-override/rollback path.
+
+_METADATA_TOKEN_URL = (
+    "http://metadata.google.internal/computeMetadata/v1/"
+    "instance/service-accounts/default/token"
+)
+_METADATA_HEADERS = {"Metadata-Flavor": "Google"}
+
+GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "")
+
+# Env-var name -> Secret Manager secret name (overridable via GCP_SECRET_<VAR>).
+_SECRET_MAP = {
+    "MONGO_URI": os.environ.get("GCP_SECRET_MONGO_URI", "kinlight-mongo-uri"),
+    "JWT_SECRET": os.environ.get("GCP_SECRET_JWT_SECRET", "kinlight-jwt-secret"),
+    "RESEND_API_KEY": os.environ.get("GCP_SECRET_RESEND_API_KEY", "kinlight-resend-api-key"),
+    "VAULT_ENCRYPTION_KEY": os.environ.get("GCP_SECRET_VAULT_ENCRYPTION_KEY", "kinlight-vault-encryption-key"),
+    "VAPID_PRIVATE_KEY": os.environ.get("GCP_SECRET_VAPID_PRIVATE_KEY", "kinlight-vapid-private-key"),
+    "VAPID_PUBLIC_KEY": os.environ.get("GCP_SECRET_VAPID_PUBLIC_KEY", "kinlight-vapid-public-key"),
+}
+
+
+def _fetch_secret_manager_token() -> str:
+    """Return a short-lived OAuth token from the GCE metadata server."""
+    resp = requests.get(_METADATA_TOKEN_URL, headers=_METADATA_HEADERS, timeout=3)
+    resp.raise_for_status()
+    return resp.json()["access_token"]
+
+
+def _fetch_secret(project_id: str, token: str, secret_name: str) -> str:
+    """Fetch the latest version of a secret and return its plaintext value."""
+    url = (
+        "https://secretmanager.googleapis.com/v1/projects/"
+        f"{project_id}/secrets/{secret_name}/versions/latest:access"
+    )
+    resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=5)
+    resp.raise_for_status()
+    data = resp.json()
+    return base64.b64decode(data["payload"]["data"]).decode("utf-8")
+
+
+def _load_secrets_from_secret_manager() -> None:
+    """
+    Populate os.environ from GCP Secret Manager for any mapped var not already
+    set. No-op unless GCP_PROJECT_ID is configured. On any error, log a warning
+    and continue — missing critical secrets are caught by the existing startup
+    validation (e.g. the JWT_SECRET RuntimeError) or fail at runtime.
+    """
+    if not GCP_PROJECT_ID:
+        return
+    try:
+        token = _fetch_secret_manager_token()
+    except Exception as exc:
+        logger.warning("F122: Secret Manager token fetch failed (%s); falling back to env vars", exc)
+        return
+    for env_name, secret_name in _SECRET_MAP.items():
+        if os.environ.get(env_name):
+            continue
+        try:
+            os.environ[env_name] = _fetch_secret(GCP_PROJECT_ID, token, secret_name)
+            logger.info("F122: loaded %s from Secret Manager", env_name)
+        except Exception as exc:
+            logger.warning("F122: failed to load %s: %s", env_name, exc)
+
+
+_load_secrets_from_secret_manager()
+
+
 MONGO_URI = os.environ.get("MONGO_URI", "")
 JWT_SECRET = os.environ.get("JWT_SECRET", "")
 if not JWT_SECRET:
     raise RuntimeError(
-        "JWT_SECRET environment variable is not set. "
-        "Set it in Railway (or your .env) before starting the server."
+        "JWT_SECRET is not set. Set it in GCP Secret Manager (kinlight-jwt-secret) "
+        "or as an env var before starting the server."
     )
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 # F04: Application-level encryption key for vault content (AES-256-GCM).

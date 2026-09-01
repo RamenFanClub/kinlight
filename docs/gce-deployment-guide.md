@@ -133,14 +133,11 @@ docker build -t kinlight-api .
 docker run -d --restart=unless-stopped --name kinlight-app \
   -p 127.0.0.1:8001:8001 \
   -e PORT=8001 \
-  -e MONGO_URI='<paste-from-railway>' \
-  -e JWT_SECRET='<paste-from-railway>' \
-  -e RESEND_API_KEY='<paste-from-railway>' \
-  -e VAULT_ENCRYPTION_KEY='<paste-from-railway>' \
+  -e GCP_PROJECT_ID='<your-gcp-project-id>' \
   kinlight-api
 ```
 
-> Copy the 4 env var values from your Railway dashboard before shutting it down. They're the same strings, nothing changes.
+> Secrets are no longer passed via `-e`. The app fetches them from GCP Secret Manager at startup using the VM's service account (see "Secret Manager setup (F121)" below).
 
 Verify:
 
@@ -448,10 +445,7 @@ Add this as a **5th job** after `dependency-audit`:
             docker run -d --restart=unless-stopped --name kinlight-app \
               -p 127.0.0.1:8001:8001 \
               -e PORT=8001 \
-              -e MONGO_URI='${{ secrets.MONGO_URI }}' \
-              -e JWT_SECRET='${{ secrets.JWT_SECRET }}' \
-              -e RESEND_API_KEY='${{ secrets.RESEND_API_KEY }}' \
-              -e VAULT_ENCRYPTION_KEY='${{ secrets.VAULT_ENCRYPTION_KEY }}' \
+              -e GCP_PROJECT_ID='${{ secrets.GCP_PROJECT_ID }}' \
               kinlight-api
             docker image prune -af --filter "until=24h"
 ```
@@ -467,10 +461,55 @@ Add this as a **5th job** after `dependency-audit`:
 | `GCE_HOST` | Ephemeral IP from Step 1 |
 | `GCE_USER` | SSH username on the VM |
 | `GCE_SSH_KEY` | Private key — `cat ~/.ssh/<key-name>`, copy **everything** including the `-----BEGIN` and `-----END` lines |
-| `MONGO_URI` | MongoDB connection string (from Railway) |
-| `JWT_SECRET` | JWT signing secret (from Railway) |
-| `RESEND_API_KEY` | Resend API key (from Railway) |
-| `VAULT_ENCRYPTION_KEY` | AES-256 encryption key (from Railway) |
+| `GCP_PROJECT_ID` | Your GCP project ID (not sensitive — the app fetches the real secrets from Secret Manager) |
+
+> `MONGO_URI`, `JWT_SECRET`, `RESEND_API_KEY`, `VAULT_ENCRYPTION_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_PUBLIC_KEY` are **no longer** stored in GitHub Secrets. They live in GCP Secret Manager (see "Secret Manager setup (F121)" below) and are fetched by the app at startup.
+
+---
+
+## Step 13b — Secret Manager setup (F121)
+
+The app fetches all runtime secrets from GCP Secret Manager at startup, authenticating with the VM's attached service account. Do this once before the first deploy.
+
+### 13b.1 Enable the API
+
+🌐 **GCP Console** → APIs & Services → Enable APIs and services → search "Secret Manager API" → **Enable**.
+
+> Also confirm the VM's access scope includes Cloud APIs: Compute Engine → VM instances → `kinlight-api` → Stop → Edit → "Access scopes" → **Allow full access to all Cloud APIs** → Save → Start. Without this, the metadata-server token can't call Secret Manager.
+
+### 13b.2 Create the secrets
+
+🌐 **GCP Console** → Security → Secret Manager → Create Secret, for each row below (or via `gcloud`):
+
+| Secret name | Value (paste current value) |
+|-------------|------------------------------|
+| `kinlight-mongo-uri` | MongoDB Atlas connection string |
+| `kinlight-jwt-secret` | JWT signing secret |
+| `kinlight-resend-api-key` | Resend API key |
+| `kinlight-vault-encryption-key` | 64-char hex AES key |
+| `kinlight-vapid-private-key` | VAPID private key |
+| `kinlight-vapid-public-key` | VAPID public key |
+
+### 13b.3 Grant the VM's service account access (least privilege)
+
+🌐 **GCP Console** → Secret Manager → each secret → Permissions → Grant Access:
+
+- **Principal:** the VM's service account. Find it at Compute Engine → VM instances → `kinlight-api` → Service account (usually `<project-number>-compute@developer.gserviceaccount.com`).
+- **Role:** `Secret Manager Secret Accessor` (`roles/secretmanager.secretAccessor`).
+
+Grant this on **each of the six secrets** (not project-wide).
+
+### 13b.4 Verify
+
+☁️ **On the VM:**
+
+```bash
+gcloud secrets versions access latest --secret=kinlight-vault-encryption-key
+```
+
+Must print the 64-char hex key.
+
+> **Note (residual risk):** any process on the VM can reach the instance metadata server and fetch the same service-account token, so this is key-*management* hardening (no plaintext in GitHub/CI/disk, plus IAM + audit), not a new crypto boundary. It does not protect against a fully compromised VM — consistent with the F04 threat model.
 
 ---
 
@@ -552,10 +591,7 @@ docker stop kinlight-app && docker rm kinlight-app
 docker run -d --restart=unless-stopped --name kinlight-app \
   -p 127.0.0.1:8001:8001 \
   -e PORT=8001 \
-  -e MONGO_URI='<value>' \
-  -e JWT_SECRET='<value>' \
-  -e RESEND_API_KEY='<value>' \
-  -e VAULT_ENCRYPTION_KEY='<value>' \
+  -e GCP_PROJECT_ID='<your-gcp-project-id>' \
   kinlight-api
 ```
 
@@ -580,14 +616,14 @@ docker run -d --restart=unless-stopped --name kinlight-app \
 
 ### Backup procedure
 
-Run on the GCE VM (the key lives in the Docker env):
+Fetch the key from GCP Secret Manager and pipe it into the backup script (runs on any machine with `gcloud` auth and secret access — e.g. the GCE VM, or your local machine):
 
 ```bash
-☁️ GCE VM
-docker exec kinlight-app printenv VAULT_ENCRYPTION_KEY | bash ~/kinlight/identity-service/scripts/backup-key.sh --stdin
+gcloud secrets versions access latest --secret=kinlight-vault-encryption-key \
+  | bash ~/kinlight/identity-service/scripts/backup-key.sh --stdin
 ```
 
-Or, if you're SSH'd in and the key is set in your shell env:
+Or, if the key is already in your shell env (e.g. you just retrieved it manually):
 
 ```bash
 ./identity-service/scripts/backup-key.sh
@@ -628,11 +664,17 @@ If you lose the VM and need to restore from backup:
 ./identity-service/scripts/restore-key.sh --raw vault-key-<date>.txt
 ```
 
-Copy the output to `VAULT_ENCRYPTION_KEY` in your `docker run` command and GitHub Secrets.
+Store the restored key in GCP Secret Manager (`kinlight-vault-encryption-key`) so the app can fetch it at startup:
+
+```bash
+printf '%s' "<64-char-hex-key>" | gcloud secrets versions add kinlight-vault-encryption-key --data-file=-
+```
+
+Then restart the server (`docker stop kinlight-app && docker rm kinlight-app && docker run ...`).
 
 ### Key rotation
 
-Use when you want to change the encryption key (e.g. after a suspected exposure, or periodically). Must run on a machine with MongoDB access (the GCE VM, or locally with network access to Atlas).
+**When to rotate (F128):** rotate the key (a) immediately on any suspected exposure, and (b) at least annually as routine hygiene. Must run on a machine with MongoDB access (the GCE VM, or locally with network access to Atlas).
 
 ```bash
 # Dry run first — confirms old key works and lists what will change
@@ -654,7 +696,10 @@ python3 identity-service/scripts/rotate-key.py \
 ```
 
 After rotation completes:
-1. Update `VAULT_ENCRYPTION_KEY` to the new key in Docker env and GitHub Secrets
+1. Update the `kinlight-vault-encryption-key` secret value in GCP Secret Manager with the new key:
+   ```bash
+   printf '%s' "$NEW_KEY" | gcloud secrets versions add kinlight-vault-encryption-key --data-file=-
+   ```
 2. Restart the server: `docker stop kinlight-app && docker rm kinlight-app && docker run ...`
 3. Run a fresh backup of the new key: `./scripts/backup-key.sh`
 4. Verify: `./scripts/restore-key.sh --asc vault-key-*.asc --verify`
