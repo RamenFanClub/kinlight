@@ -1565,7 +1565,7 @@ class TestVaultSyncLogEncryption:
         update_kwargs = mock_vaults.update_one.call_args[0][1]
         assert "log" not in update_kwargs["$set"]
         assert update_kwargs["$unset"] == {"log": ""}
-        decrypted = decrypt_content(update_kwargs["$set"]["content"])
+        decrypted = decrypt_content(update_kwargs["$set"]["content"], "test")
         assert decrypted["log"] == [{"msg": "Contact added: David", "time": "x"}]
 
     def test_log_capped_at_20(self):
@@ -1575,7 +1575,7 @@ class TestVaultSyncLogEncryption:
         with patch("main.vaults_col") as mock_vaults, patch("main.trusted_links_col", None):
             mock_vaults.update_one.return_value = None
             vault_sync(body, {"_id": "test"})
-        decrypted = decrypt_content(mock_vaults.update_one.call_args[0][1]["$set"]["content"])
+        decrypted = decrypt_content(mock_vaults.update_one.call_args[0][1]["$set"]["content"], "test")
         assert len(decrypted["log"]) == 20
 
 
@@ -1692,6 +1692,45 @@ class TestDecryptContent:
         truncated = base64.b64encode(raw[:10]).decode("ascii")
         with pytest.raises(Exception):
             decrypt_content(truncated)
+
+
+# ─── F134: AAD-BOUND ENCRYPTION ────────────────────────────────────────────────
+
+class TestAadBinding:
+    """F134: encrypted blobs are bound to their owner via GCM AAD."""
+
+    def test_content_round_trip_with_user(self):
+        original = {"assets": [{"id": 1, "name": "House"}], "kin": []}
+        encrypted = encrypt_content(original, "user-123")
+        assert decrypt_content(encrypted, "user-123") == original
+
+    def test_content_cross_user_raises(self):
+        original = {"assets": [{"id": 1}]}
+        encrypted = encrypt_content(original, "user-123")
+        with pytest.raises(Exception):
+            decrypt_content(encrypted, "user-999")
+
+    def test_content_legacy_none_aad_fallback(self):
+        # Pre-F134 blobs (None AAD) still decrypt via fallback when user_id given.
+        original = {"assets": [{"id": 1}]}
+        encrypted = encrypt_content(original)  # None AAD (legacy)
+        assert decrypt_content(encrypted, "user-123") == original
+
+    def test_bytes_round_trip_with_user(self):
+        data = b"secret file contents"
+        encrypted = encrypt_bytes(data, "user-123")
+        assert decrypt_bytes(encrypted, "user-123") == data
+
+    def test_bytes_cross_user_raises(self):
+        data = b"secret file contents"
+        encrypted = encrypt_bytes(data, "user-123")
+        with pytest.raises(Exception):
+            decrypt_bytes(encrypted, "user-999")
+
+    def test_bytes_legacy_none_aad_fallback(self):
+        data = b"secret file contents"
+        encrypted = encrypt_bytes(data)  # None AAD (legacy)
+        assert decrypt_bytes(encrypted, "user-123") == data
 
 
 # ─── F122: GCP SECRET MANAGER LOADER ─────────────────────────────────────────

@@ -6,6 +6,24 @@
 
 ---
 
+## ✅ CHECKPOINT COMPLETE — F134 (Bind encrypted blobs to user via GCM AAD)
+
+> **Completed:** 03 Sep 2026
+> **Status:** Code complete (351 pytest tests pass).
+
+### What was built
+- **F134 (AAD binding):** `encrypt_content(content, user_id)` and `encrypt_bytes(data, user_id)` bind each blob with `AAD = str(userId)`, so a vault `content` blob or GridFS file body swapped between users fails to decrypt. `decrypt_content`/`decrypt_bytes` try `AAD=userId` and fall back to legacy `None`-AAD on `InvalidTag` (self-healing; no flag needed — GCM authenticates AAD).
+- **Threading:** `_decrypt_vault_content(vault_doc)` helper used at every content-decrypt site; `vault_sync`, `upload_file`, `download_file`, and `_download_and_decrypt` (owner via `get_owner`) pass `str(userId)`.
+- **One-off migration:** `scripts/migrate_bind_aad.py` (`--dry-run`, `--skip-files`) re-encrypts legacy content + GridFS file bytes with AAD.
+- **Key rotation:** `rotate-key.py` is AAD-aware (decrypt with old key + AAD fallback, re-encrypt with new key + AAD).
+
+### Key reminders
+- Decrypt's legacy fallback is a deliberate `except InvalidTag:` — a genuinely tampered blob still raises (both AAD and None attempts fail). Do not broaden to `except Exception`.
+- `_decrypt_vault_content` uses `str(vault_doc["userId"])`; the AAD string must match exactly what `vault_sync`/`upload_file` used at encrypt time (`str(current_user["_id"])`).
+- Filenames (F132) and user PII (F133) use `_encrypt_string`/`_decrypt_string` — intentionally **not** AAD-bound here (out of F134's stated scope of `encrypt_content`/`encrypt_bytes`).
+
+---
+
 ## ✅ CHECKPOINT COMPLETE — F133 (Encrypt user PII at rest)
 
 > **Completed:** 03 Sep 2026
@@ -86,7 +104,7 @@
 ## Before pushing
 
 ```bash
-./test.sh   # Runs pytest — must be 345 passed
+./test.sh   # Runs pytest — must be 351 passed
 cp index.html frontend/index.html   # Keep both copies in sync
 # Also sync PWA files (F100):
 cp manifest.json sw.js favicon.svg icon-192.png icon-512.png frontend/

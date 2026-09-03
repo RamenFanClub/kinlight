@@ -31,6 +31,7 @@ import sys
 
 from bson import ObjectId
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.exceptions import InvalidTag
 from gridfs import GridFS
 from pymongo import MongoClient
 
@@ -50,10 +51,11 @@ def _cipher(key_hex: str) -> AESGCM:
     return AESGCM(bytes.fromhex(key_hex))
 
 
-def decrypt_vault_content(stored, cipher: AESGCM):
+def decrypt_vault_content(stored, cipher: AESGCM, user_id: str = None):
     """
     Decrypt vault content — mirrors main.py decrypt_content().
     Handles: dict (plaintext passthrough), str (encrypted), None (empty).
+    F134: tries AAD=user_id, falling back to legacy None AAD on InvalidTag.
     """
     if stored is None:
         return {}
@@ -61,28 +63,41 @@ def decrypt_vault_content(stored, cipher: AESGCM):
         return stored  # pre-encryption vault — passthrough
     raw = base64.b64decode(stored)
     nonce, ciphertext = raw[:12], raw[12:]
-    plaintext = cipher.decrypt(nonce, ciphertext, None)
+    if user_id:
+        try:
+            plaintext = cipher.decrypt(nonce, ciphertext, user_id.encode("utf-8"))
+        except InvalidTag:
+            plaintext = cipher.decrypt(nonce, ciphertext, None)
+    else:
+        plaintext = cipher.decrypt(nonce, ciphertext, None)
     return json.loads(plaintext.decode("utf-8"))
 
 
-def encrypt_vault_content(content_dict: dict, cipher: AESGCM) -> str:
-    """Encrypt vault content — mirrors main.py encrypt_content()."""
+def encrypt_vault_content(content_dict: dict, cipher: AESGCM, user_id: str = None) -> str:
+    """Encrypt vault content — mirrors main.py encrypt_content() (F134 AAD)."""
     plaintext = json.dumps(content_dict, separators=(",", ":")).encode("utf-8")
     nonce = os.urandom(12)
-    ciphertext = cipher.encrypt(nonce, plaintext, None)
+    aad = user_id.encode("utf-8") if user_id else None
+    ciphertext = cipher.encrypt(nonce, plaintext, aad)
     return base64.b64encode(nonce + ciphertext).decode("ascii")
 
 
-def decrypt_file_bytes(encrypted: bytes, cipher: AESGCM) -> bytes:
-    """Decrypt file bytes — mirrors main.py decrypt_bytes()."""
+def decrypt_file_bytes(encrypted: bytes, cipher: AESGCM, user_id: str = None) -> bytes:
+    """Decrypt file bytes — mirrors main.py decrypt_bytes() (F134 AAD)."""
     nonce, ciphertext = encrypted[:12], encrypted[12:]
+    if user_id:
+        try:
+            return cipher.decrypt(nonce, ciphertext, user_id.encode("utf-8"))
+        except InvalidTag:
+            return cipher.decrypt(nonce, ciphertext, None)
     return cipher.decrypt(nonce, ciphertext, None)
 
 
-def encrypt_file_bytes(plaintext: bytes, cipher: AESGCM) -> bytes:
-    """Encrypt file bytes — mirrors main.py encrypt_bytes()."""
+def encrypt_file_bytes(plaintext: bytes, cipher: AESGCM, user_id: str = None) -> bytes:
+    """Encrypt file bytes — mirrors main.py encrypt_bytes() (F134 AAD)."""
     nonce = os.urandom(12)
-    ciphertext = cipher.encrypt(nonce, plaintext, None)
+    aad = user_id.encode("utf-8") if user_id else None
+    ciphertext = cipher.encrypt(nonce, plaintext, aad)
     return nonce + ciphertext
 
 
@@ -181,6 +196,7 @@ def main():
 
     for doc in vaults:
         vid = doc.get("userId", doc.get("_id", "?"))
+        user_id = str(doc["userId"]) if doc.get("userId") else None
         current_version = doc.get("encryptionKeyVersion", 0)
 
         if current_version >= args.target_version:
@@ -196,7 +212,7 @@ def main():
             # Pre-encryption vault — just encrypt it with the new key
             vault_plaintext += 1
             if args.execute:
-                encrypted = encrypt_vault_content(stored, new_cipher)
+                encrypted = encrypt_vault_content(stored, new_cipher, user_id)
                 db.vaults.update_one(
                     {"_id": doc["_id"]},
                     {"$set": {
@@ -208,14 +224,14 @@ def main():
 
         # Encrypted vault — decrypt with old, re-encrypt with new
         try:
-            content = decrypt_vault_content(stored, old_cipher)
+            content = decrypt_vault_content(stored, old_cipher, user_id)
         except Exception as e:
             print(f"  {RED}FAIL{NC} vault '{vid}': cannot decrypt — {e}")
             print(f"    This may mean old-key is wrong. Aborting.")
             sys.exit(1)
 
         if args.execute:
-            new_blob = encrypt_vault_content(content, new_cipher)
+            new_blob = encrypt_vault_content(content, new_cipher, user_id)
             db.vaults.update_one(
                 {"_id": doc["_id"]},
                 {"$set": {
@@ -239,6 +255,8 @@ def main():
         for fdoc in file_docs:
             fid = fdoc["_id"]
             fid_str = str(fid)
+            owner = (fdoc.get("metadata") or {}).get("userId")
+            owner_str = str(owner) if owner else None
             current_version = fdoc.get("metadata", {}).get("encryptionKeyVersion", 0)
 
             if current_version >= args.target_version:
@@ -254,14 +272,14 @@ def main():
                 continue
 
             try:
-                plaintext = decrypt_file_bytes(encrypted_data, old_cipher)
+                plaintext = decrypt_file_bytes(encrypted_data, old_cipher, owner_str)
             except Exception as e:
                 print(f"  {RED}FAIL{NC} file '{fid_str}': cannot decrypt — {e}")
                 print(f"    This may mean old-key is wrong. Aborting.")
                 sys.exit(1)
 
             if args.execute:
-                new_data = encrypt_file_bytes(plaintext, new_cipher)
+                new_data = encrypt_file_bytes(plaintext, new_cipher, owner_str)
                 metadata = fdoc.get("metadata", {}) or {}
                 metadata["encryptionKeyVersion"] = args.target_version
 

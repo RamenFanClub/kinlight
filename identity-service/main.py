@@ -26,6 +26,7 @@ from bson import ObjectId
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.exceptions import InvalidTag
 from fastapi import Body, Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -389,28 +390,35 @@ def _get_aesgcm() -> Optional[AESGCM]:
     return AESGCM(bytes.fromhex(VAULT_ENCRYPTION_KEY))
 
 
-def encrypt_content(content_dict: dict) -> str:
+def encrypt_content(content_dict: dict, user_id: Optional[str] = None) -> str:
     """
     Encrypt a vault content dict → base64 string for MongoDB storage.
     If no encryption key is configured, returns the dict unchanged (passthrough).
     Format: base64( nonce_12_bytes + ciphertext_with_tag )
+
+    F134: when user_id is supplied, the blob is bound to that user via GCM AAD,
+    so a `content` blob swapped between users will fail to decrypt.
     """
     cipher = _get_aesgcm()
     if cipher is None:
         return content_dict  # type: ignore[return-value]
     plaintext = json.dumps(content_dict, separators=(",", ":")).encode("utf-8")
     nonce = os.urandom(12)
-    ciphertext = cipher.encrypt(nonce, plaintext, None)
+    aad = user_id.encode("utf-8") if user_id else None
+    ciphertext = cipher.encrypt(nonce, plaintext, aad)
     return base64.b64encode(nonce + ciphertext).decode("ascii")
 
 
-def decrypt_content(stored) -> dict:
+def decrypt_content(stored, user_id: Optional[str] = None) -> dict:
     """
     Decrypt vault content from MongoDB.
     Handles three cases:
     1. dict  → plaintext (pre-F04 migration); return as-is
     2. str   → encrypted base64 blob; decrypt and return dict
     3. None  → return empty dict
+
+    F134: decrypts with AAD=user_id when supplied, falling back to a
+    legacy (pre-F134) None-AAD decryption on InvalidTag.
     """
     if stored is None:
         return {}
@@ -422,33 +430,50 @@ def decrypt_content(stored) -> dict:
     raw = base64.b64decode(stored)
     nonce = raw[:12]
     ciphertext = raw[12:]
-    plaintext = cipher.decrypt(nonce, ciphertext, None)
+    if user_id:
+        try:
+            plaintext = cipher.decrypt(nonce, ciphertext, user_id.encode("utf-8"))
+        except InvalidTag:
+            plaintext = cipher.decrypt(nonce, ciphertext, None)
+    else:
+        plaintext = cipher.decrypt(nonce, ciphertext, None)
     return json.loads(plaintext.decode("utf-8"))
 
 
-def encrypt_bytes(plaintext: bytes) -> bytes:
+def encrypt_bytes(plaintext: bytes, user_id: Optional[str] = None) -> bytes:
     """
     Encrypt raw bytes with AES-256-GCM.
     Format: nonce_12_bytes + ciphertext_with_tag
     Returns raw bytes — no base64 (GridFS handles binary natively).
+
+    F134: when user_id is supplied, the blob is bound to that user via GCM AAD.
     """
     cipher = _get_aesgcm()
     if cipher is None:
         raise RuntimeError("VAULT_ENCRYPTION_KEY not set — cannot encrypt files.")
     nonce = os.urandom(12)
-    ciphertext = cipher.encrypt(nonce, plaintext, None)
+    aad = user_id.encode("utf-8") if user_id else None
+    ciphertext = cipher.encrypt(nonce, plaintext, aad)
     return nonce + ciphertext
 
 
-def decrypt_bytes(encrypted: bytes) -> bytes:
+def decrypt_bytes(encrypted: bytes, user_id: Optional[str] = None) -> bytes:
     """
     Decrypt bytes produced by encrypt_bytes. Returns plaintext.
+
+    F134: decrypts with AAD=user_id when supplied, falling back to a
+    legacy (pre-F134) None-AAD decryption on InvalidTag.
     """
     cipher = _get_aesgcm()
     if cipher is None:
         raise RuntimeError("VAULT_ENCRYPTION_KEY not set — cannot decrypt files.")
     nonce = encrypted[:12]
     ciphertext = encrypted[12:]
+    if user_id:
+        try:
+            return cipher.decrypt(nonce, ciphertext, user_id.encode("utf-8"))
+        except InvalidTag:
+            return cipher.decrypt(nonce, ciphertext, None)
     return cipher.decrypt(nonce, ciphertext, None)
 
 
@@ -504,6 +529,14 @@ def _decrypt_user(user: dict) -> dict:
     return user
 
 
+def _decrypt_vault_content(vault_doc: dict) -> dict:
+    """F134: decrypt a vault doc's content bound to its owning user (AAD)."""
+    return decrypt_content(
+        vault_doc.get("content"),
+        str(vault_doc.get("userId")) if vault_doc.get("userId") else None,
+    )
+
+
 # ─── VAULT SCHEMA HELPERS ─────────────────────────────────────────────────────
 
 def extract_vault_fields(vault_blob: dict) -> dict:
@@ -533,7 +566,7 @@ def _get_content_or_legacy(doc: dict, key: str, fallback):
 def reconstruct_vault_blob(doc: dict) -> dict:
     """Rebuild the frontend vault blob from a MongoDB vault document."""
     # F04: decrypt content if encrypted (string), passthrough if plaintext (dict)
-    content = decrypt_content(doc.get("content"))
+    content = _decrypt_vault_content(doc)
     # Temporarily inject decrypted content back so _get_content_or_legacy works
     doc_with_content = {**doc, "content": content}
     return {
@@ -920,7 +953,7 @@ def _webauthn_credential_id_bytes(credential_id) -> bytes:
 
 def get_trusted_contact(vault_doc: dict) -> Optional[dict]:
     """F115: return the kin contact flagged isTrusted, or None."""
-    content = decrypt_content(vault_doc.get("content"))
+    content = _decrypt_vault_content(vault_doc)
     contacts = content.get("kin") or []
     for c in contacts:
         if c.get("isTrusted"):
@@ -931,7 +964,7 @@ def get_trusted_contact(vault_doc: dict) -> Optional[dict]:
 def get_contacts_to_notify(vault_doc: dict, days_overdue: int) -> list:
     """Return the slice of contacts to notify based on protocol and days overdue."""
     # F04: decrypt content if encrypted
-    content = decrypt_content(vault_doc.get("content"))
+    content = _decrypt_vault_content(vault_doc)
     contacts = content.get("kin") or []
     if not contacts:
         return []
@@ -1119,7 +1152,8 @@ def _download_and_decrypt(file_id: str) -> Optional[bytes]:
         return None
     encrypted_data = result[0]
     try:
-        return decrypt_bytes(encrypted_data)
+        owner = _storage_backend.get_owner(file_id)
+        return decrypt_bytes(encrypted_data, owner)
     except Exception as e:
         logger.warning(f"Failed to decrypt file {file_id}: {e}")
         return None
@@ -1140,7 +1174,7 @@ def send_notification_email(contact: dict, vault_doc: dict, holder_name: str = "
     total_size = len(pdf_bytes)
     max_attach = 20 * 1024 * 1024  # 20 MB cumulative — 5 MB headroom for encoding overhead
 
-    content = decrypt_content(vault_doc.get("content"))
+    content = _decrypt_vault_content(vault_doc)
 
     # Will attachment
     will = content.get("will") if isinstance(content, dict) else None
@@ -1301,7 +1335,7 @@ def send_reset_email(user: dict, token: str) -> bool:
 def generate_pdf_for_contact(contact: dict, vault_doc: dict, holder_name: str = "the vault holder") -> bytes:
     """Generate a PDF package for a single contact. Returns raw bytes."""
     # F04: decrypt content if encrypted
-    content = decrypt_content(vault_doc.get("content"))
+    content = _decrypt_vault_content(vault_doc)
     assets    = content.get("assets") or []
     wishes    = content.get("wishes") or []
     all_kin   = content.get("kin") or []
@@ -2097,7 +2131,7 @@ def vault_sync(body: dict, current_user: dict = Depends(get_current_user)) -> di
     }
 
     # F04: encrypt vault content before storage
-    stored_content = encrypt_content(content)
+    stored_content = encrypt_content(content, str(current_user["_id"]))
 
     vaults_col.update_one(
         {"userId": current_user["_id"]},
@@ -2157,7 +2191,7 @@ def contact_nominate(body: dict, current_user: dict) -> dict:
     if not vault_doc:
         return {"ok": False, "error": "no vault found"}
     # F04: decrypt content if encrypted
-    vault_content = decrypt_content(vault_doc.get("content"))
+    vault_content = _decrypt_vault_content(vault_doc)
     vault_contacts = vault_content.get("kin") or []
     contact_emails = [c.get("email", "").strip().lower() for c in vault_contacts]
     if contact_email.lower() not in contact_emails:
@@ -2190,7 +2224,7 @@ def preview_package(
     if not vault_doc:
         raise HTTPException(status_code=400, detail="No vault found.")
 
-    vault_content: dict = decrypt_content(vault_doc.get("content", {}))
+    vault_content: dict = _decrypt_vault_content(vault_doc)
     contacts: list = vault_content.get("kin") or []
     if not contacts:
         raise HTTPException(status_code=400, detail="No contacts in vault.")
@@ -2258,7 +2292,7 @@ def test_notification(request: Request, current_user: dict = Depends(get_current
     if not vault_doc:
         raise HTTPException(status_code=400, detail="No vault found — create some content first")
 
-    vault_content: dict = decrypt_content(vault_doc.get("content", {}))
+    vault_content: dict = _decrypt_vault_content(vault_doc)
     contacts: list = vault_content.get("kin") or []
     if not contacts:
         raise HTTPException(status_code=400, detail="No contacts in vault — add a contact first")
@@ -2352,7 +2386,7 @@ def checkin(current_user: dict = Depends(get_current_user)):
     if was_overdue and existing:
         holder_name = current_user.get("name", "the vault holder")
         # F04: decrypt content if encrypted
-        contacts = decrypt_content(existing.get("content")).get("kin") or []
+        contacts = _decrypt_vault_content(existing).get("kin") or []
         for contact in contacts:
             if send_allclear_email(contact, holder_name):
                 allclear_count += 1
@@ -2704,7 +2738,7 @@ async def upload_file(
                    "The file header must match the selected format.",
         )
 
-    encrypted_data = encrypt_bytes(file_data)
+    encrypted_data = encrypt_bytes(file_data, str(current_user["_id"]))
     filename_enc = _encrypt_string(filename)
     file_id = _storage_backend.upload(
         encrypted_data,
@@ -2743,7 +2777,7 @@ def download_file(
 
     encrypted_data, filename, content_type, filename_encrypted = result
     try:
-        plaintext = decrypt_bytes(encrypted_data)
+        plaintext = decrypt_bytes(encrypted_data, str(current_user["_id"]))
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to decrypt file")
 
