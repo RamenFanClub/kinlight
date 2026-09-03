@@ -30,10 +30,11 @@ class StorageBackend(ABC):
         ...
 
     @abstractmethod
-    def download(self, file_id: str) -> Optional[Tuple[bytes, str, str]]:
+    def download(self, file_id: str) -> Optional[Tuple[bytes, str, str, bool]]:
         """
-        Retrieve (data, filename, content_type) for a file_id.
-        Return None if the file does not exist.
+        Retrieve (data, filename, content_type, filename_is_encrypted) for a file_id.
+        filename_is_encrypted is True when the caller stored an encrypted filename
+        (F132) and must decrypt before use. Return None if the file does not exist.
         """
         ...
 

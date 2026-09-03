@@ -452,6 +452,32 @@ def decrypt_bytes(encrypted: bytes) -> bytes:
     return cipher.decrypt(nonce, ciphertext, None)
 
 
+def _encrypt_string(plaintext: str) -> str:
+    """
+    F132: Encrypt a short string (e.g. a filename) → base64 string for GridFS.
+    Format: base64( nonce_12_bytes + ciphertext_with_tag ).
+    """
+    cipher = _get_aesgcm()
+    if cipher is None:
+        raise RuntimeError("VAULT_ENCRYPTION_KEY not set — cannot encrypt filename.")
+    nonce = os.urandom(12)
+    ciphertext = cipher.encrypt(nonce, plaintext.encode("utf-8"), None)
+    return base64.b64encode(nonce + ciphertext).decode("ascii")
+
+
+def _decrypt_string(encrypted: str) -> str:
+    """
+    F132: Decrypt a base64 string produced by _encrypt_string. Returns plaintext.
+    """
+    cipher = _get_aesgcm()
+    if cipher is None:
+        raise RuntimeError("VAULT_ENCRYPTION_KEY not set — cannot decrypt filename.")
+    raw = base64.b64decode(encrypted)
+    nonce = raw[:12]
+    ciphertext = raw[12:]
+    return cipher.decrypt(nonce, ciphertext, None).decode("utf-8")
+
+
 # ─── VAULT SCHEMA HELPERS ─────────────────────────────────────────────────────
 
 def extract_vault_fields(vault_blob: dict) -> dict:
@@ -1064,7 +1090,7 @@ def _download_and_decrypt(file_id: str) -> Optional[bytes]:
     if result is None:
         logger.warning(f"File {file_id} not found in storage backend")
         return None
-    encrypted_data, _, _ = result
+    encrypted_data = result[0]
     try:
         return decrypt_bytes(encrypted_data)
     except Exception as e:
@@ -2651,13 +2677,14 @@ async def upload_file(
         )
 
     encrypted_data = encrypt_bytes(file_data)
+    filename_enc = _encrypt_string(filename)
     file_id = _storage_backend.upload(
         encrypted_data,
-        filename=filename,
+        filename=filename_enc,
         content_type=content_type,
         metadata={
             "userId": str(current_user["_id"]),
-            "filename": filename,
+            "filenameEncrypted": True,
         },
     )
 
@@ -2686,11 +2713,17 @@ def download_file(
     if result is None:
         raise HTTPException(status_code=404, detail="File not found")
 
-    encrypted_data, filename, content_type = result
+    encrypted_data, filename, content_type, filename_encrypted = result
     try:
         plaintext = decrypt_bytes(encrypted_data)
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to decrypt file")
+
+    if filename_encrypted:
+        try:
+            filename = _decrypt_string(filename)
+        except Exception:
+            raise HTTPException(status_code=500, detail="Failed to decrypt filename")
 
     from fastapi.responses import Response
     headers = {

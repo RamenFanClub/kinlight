@@ -34,7 +34,7 @@ class GridFSBackend(StorageBackend):
         )
         return str(file_id)
 
-    def download(self, file_id: str) -> Optional[Tuple[bytes, str, str]]:
+    def download(self, file_id: str) -> Optional[Tuple[bytes, str, str, bool]]:
         try:
             oid = ObjectId(file_id)
         except Exception:
@@ -43,7 +43,9 @@ class GridFSBackend(StorageBackend):
             grid_out = self.fs.get(oid)
             data = grid_out.read()
             meta = grid_out.metadata or {}
-            return data, meta.get("filename", grid_out.filename), grid_out.content_type
+            filename_encrypted = bool(meta.get("filenameEncrypted"))
+            filename = grid_out.filename or meta.get("filename", "file")
+            return data, filename, grid_out.content_type, filename_encrypted
         except (NoFile, Exception):
             return None
 

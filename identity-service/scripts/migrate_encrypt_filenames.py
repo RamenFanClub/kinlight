@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+"""F132 — migrate GridFS filenames from plaintext to encrypted-at-rest.
+
+Before F132, GridFS stored the uploaded document name in plaintext in both
+`fs.files.filename` and `fs.files.metadata.filename`. F132 encrypts the filename
+(AES-256-GCM via the existing VAULT_ENCRYPTION_KEY) so a Mongo-only attacker can
+no longer read document names like "Will_Final.pdf".
+
+For every fs.files doc that has not yet been migrated (`metadata.filenameEncrypted`
+absent/false):
+  1. read the plaintext name from `filename` (falling back to `metadata.filename`)
+  2. encrypt it
+  3. $set filename=encrypted, metadata.filenameEncrypted=True, $unset metadata.filename
+
+Run from identity-service/:
+    source .venv/bin/activate
+    MONGO_URI="mongodb+srv://..." VAULT_ENCRYPTION_KEY="..." \
+        python3 scripts/migrate_encrypt_filenames.py --dry-run
+    MONGO_URI="mongodb+srv://..." VAULT_ENCRYPTION_KEY="..." \
+        python3 scripts/migrate_encrypt_filenames.py
+"""
+
+import argparse
+import base64
+import os
+
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from pymongo import MongoClient
+
+DB_NAME = "emergency_exit"
+
+
+def _connect():
+    mongo_uri = os.environ.get("MONGO_URI")
+    if not mongo_uri:
+        raise SystemExit("ERROR: MONGO_URI environment variable not set.")
+    return MongoClient(mongo_uri)[DB_NAME]
+
+
+def _cipher():
+    key = os.environ.get("VAULT_ENCRYPTION_KEY", "")
+    if not key:
+        raise SystemExit("ERROR: VAULT_ENCRYPTION_KEY environment variable not set.")
+    return AESGCM(bytes.fromhex(key))
+
+
+def _encrypt_string(cipher: AESGCM, plaintext: str) -> str:
+    nonce = os.urandom(12)
+    ciphertext = cipher.encrypt(nonce, plaintext.encode("utf-8"), None)
+    return base64.b64encode(nonce + ciphertext).decode("ascii")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="F132: encrypt plaintext GridFS filenames at rest")
+    parser.add_argument("--dry-run", action="store_true", help="Report without writing")
+    args = parser.parse_args()
+
+    db = _connect()
+    cipher = _cipher()
+    files = db["fs.files"]
+
+    migrated = 0
+    skipped = 0
+    for doc in files.find({"metadata.filenameEncrypted": {"$ne": True}}):
+        fid = doc["_id"]
+        plain_name = doc.get("filename") or (doc.get("metadata") or {}).get("filename") or "file"
+
+        if args.dry_run:
+            print(f"  [dry-run] file {fid}: would encrypt filename {plain_name!r}")
+            migrated += 1
+            continue
+
+        files.update_one(
+            {"_id": fid},
+            {
+                "$set": {
+                    "filename": _encrypt_string(cipher, plain_name),
+                    "metadata.filenameEncrypted": True,
+                },
+                "$unset": {"metadata.filename": ""},
+            },
+        )
+        migrated += 1
+
+    if args.dry_run:
+        print(f"Dry run complete. {migrated} file(s) would be migrated, {skipped} skipped.")
+    else:
+        print(f"Done. {migrated} file(s) migrated, {skipped} skipped.")
+
+
+if __name__ == "__main__":
+    main()

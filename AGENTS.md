@@ -6,6 +6,24 @@
 
 ---
 
+## ✅ CHECKPOINT COMPLETE — F132 (Encrypt GridFS filenames at rest)
+
+> **Completed:** 03 Sep 2026
+> **Status:** Code complete (336 pytest tests pass).
+
+### What was built
+- **F132 (filename encryption):** `fs.files.filename` + `metadata.filename` no longer store plaintext document names. Upload encrypts the filename with AES-256-GCM (`_encrypt_string`/`_decrypt_string` in `main.py`) and stores ciphertext in `fs.files.filename` with `metadata.filenameEncrypted=True`. `GET /files/{id}` decrypts before `_safe_filename()`. Legacy files pass through unchanged until migrated.
+- **Storage interface:** `StorageBackend.download()` now returns a 4-tuple `(data, filename, content_type, filename_is_encrypted)`.
+- **One-off migration:** `scripts/migrate_encrypt_filenames.py` (`--dry-run` supported) re-encrypts existing files' plaintext names.
+- **Key rotation:** `rotate-key.py` now re-encrypts filenames (and encrypts legacy plaintext names) during rotation.
+
+### Key reminders
+- The notification / preview-package / test-notification / PDF paths read filenames from the F04-encrypted vault `content`, **not** from GridFS — no change needed there.
+- `metadata.userId` stays plaintext (needed for ownership checks; not a document-name leak).
+- `filenameEncrypted` flag on `fs.files.metadata` is the source of truth for decrypt-at-download vs legacy passthrough.
+
+---
+
 ## ✅ CHECKPOINT COMPLETE — F102 (File Upload via GridFS)
 
 > **Completed:** 30 July 2026
@@ -51,7 +69,7 @@
 ## Before pushing
 
 ```bash
-./test.sh   # Runs pytest — must be 325 passed
+./test.sh   # Runs pytest — must be 336 passed
 cp index.html frontend/index.html   # Keep both copies in sync
 # Also sync PWA files (F100):
 cp manifest.json sw.js favicon.svg icon-192.png icon-512.png frontend/

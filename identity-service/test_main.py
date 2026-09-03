@@ -52,6 +52,8 @@ from main import (
     decrypt_content,
     encrypt_bytes,
     decrypt_bytes,
+    _encrypt_string,
+    _decrypt_string,
     send_notification_email,
     _download_and_decrypt,
     create_trusted_token,
@@ -2547,6 +2549,35 @@ class TestEncryptBytes:
             decrypt_bytes(b"test")
 
 
+class TestEncryptString:
+    """F132: AES-256-GCM string encryption for GridFS filenames."""
+
+    def test_round_trip(self):
+        from main import VAULT_ENCRYPTION_KEY
+        assert VAULT_ENCRYPTION_KEY, "VAULT_ENCRYPTION_KEY must be set for these tests"
+        name = "Will_Final.pdf"
+        encrypted = _encrypt_string(name)
+        assert isinstance(encrypted, str)
+        assert encrypted != name
+        assert _decrypt_string(encrypted) == name
+
+    def test_no_plaintext_leak(self):
+        name = "Statement-of-Wishes_2026.pdf"
+        encrypted = _encrypt_string(name)
+        assert name not in encrypted
+
+    def test_round_trip_unicode(self):
+        name = "Résumé & Will.pdf"
+        assert _decrypt_string(_encrypt_string(name)) == name
+
+    def test_raise_without_key(self, monkeypatch):
+        monkeypatch.setattr("main.VAULT_ENCRYPTION_KEY", "")
+        with pytest.raises(RuntimeError, match="VAULT_ENCRYPTION_KEY"):
+            _encrypt_string("Will.pdf")
+        with pytest.raises(RuntimeError, match="VAULT_ENCRYPTION_KEY"):
+            _decrypt_string("dGVzdA==")
+
+
 class TestValidateFilename:
     """Filename validation for file uploads."""
 
@@ -2598,10 +2629,11 @@ class TestFileUploadEndpoints:
             headers=headers,
         )
 
-    def _mock_storage(self, owner=None):
+    def _mock_storage(self, owner=None, download_result=None):
         mock = MagicMock()
         mock.upload.return_value = self.FILE_ID
-        mock.download.return_value = (b"encrypted_blob", "test.pdf", "application/pdf")
+        mock.download.return_value = download_result or (
+            b"encrypted_blob", "test.pdf", "application/pdf", False)
         mock.delete.return_value = True
         mock.get_owner.return_value = str(TestFileUploadEndpoints.USER_ID) if owner is None else owner
         return mock
@@ -2626,6 +2658,22 @@ class TestFileUploadEndpoints:
         assert data["ok"] is True
         assert data["file_id"] == self.FILE_ID
         assert data["filename"] == "test.pdf"
+
+    def test_upload_encrypts_filename_at_rest(self):
+        mock_storage = self._mock_storage()
+        with patch("main._storage_backend", mock_storage), \
+             patch("main.users_col") as mock_users, \
+             patch("main.VAULT_ENCRYPTION_KEY", "00" * 32):
+            mock_users.find_one.return_value = self._user()
+            r = self._post_file("/files/upload", filename="Will_Final.pdf",
+                               file_content=b"%PDF-1.4\nfake pdf content for testing")
+        assert r.status_code == 200
+        _, kwargs = mock_storage.upload.call_args
+        stored_filename = kwargs["filename"]
+        assert stored_filename != "Will_Final.pdf"
+        assert "Will_Final" not in stored_filename
+        assert kwargs["metadata"]["filenameEncrypted"] is True
+        assert "filename" not in kwargs["metadata"]
 
     def test_upload_invalid_extension(self):
         with patch("main._storage_backend", self._mock_storage()), \
@@ -2678,6 +2726,40 @@ class TestFileUploadEndpoints:
             )
         assert r.status_code == 200
         assert r.content == b"decrypted content"
+
+    def test_download_decrypts_encrypted_filename(self):
+        mock_storage = self._mock_storage(download_result=(
+            b"encrypted_blob", "aGVsbG8=", "application/pdf", True))
+        with patch("main._storage_backend", mock_storage), \
+             patch("main.users_col") as mock_users, \
+             patch("main.decrypt_bytes", return_value=b"decrypted content"), \
+             patch("main._decrypt_string", return_value="MyWill.pdf") as mock_dec:
+            mock_users.find_one.return_value = self._user()
+            client = TestClient(main.app)
+            r = client.get(
+                f"/files/{self.FILE_ID}",
+                headers={"Authorization": f"Bearer {self._token()}"},
+            )
+        assert r.status_code == 200
+        assert r.headers["Content-Disposition"] == 'attachment; filename="MyWill.pdf"'
+        mock_dec.assert_called_once_with("aGVsbG8=")
+
+    def test_download_legacy_filename_passthrough(self):
+        mock_storage = self._mock_storage(download_result=(
+            b"encrypted_blob", "Legacy.pdf", "application/pdf", False))
+        with patch("main._storage_backend", mock_storage), \
+             patch("main.users_col") as mock_users, \
+             patch("main.decrypt_bytes", return_value=b"decrypted content"), \
+             patch("main._decrypt_string") as mock_dec:
+            mock_users.find_one.return_value = self._user()
+            client = TestClient(main.app)
+            r = client.get(
+                f"/files/{self.FILE_ID}",
+                headers={"Authorization": f"Bearer {self._token()}"},
+            )
+        assert r.status_code == 200
+        assert r.headers["Content-Disposition"] == 'attachment; filename="Legacy.pdf"'
+        mock_dec.assert_not_called()
 
     def test_download_not_owned(self):
         mock_storage = self._mock_storage(owner="someone_else")

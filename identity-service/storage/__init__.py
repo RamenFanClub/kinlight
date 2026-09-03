@@ -7,7 +7,7 @@ Usage:
 
     file_id = storage.upload(data, "will.pdf", "application/pdf",
                              {"userId": "abc123"})
-    data, name, ct = storage.download(file_id)
+    data, name, ct, encrypted = storage.download(file_id)
     storage.delete(file_id)
 
 To swap backends set STORAGE_BACKEND env var (default "gridfs").

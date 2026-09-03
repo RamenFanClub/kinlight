@@ -85,6 +85,19 @@ def encrypt_file_bytes(plaintext: bytes, cipher: AESGCM) -> bytes:
     return nonce + ciphertext
 
 
+def decrypt_string(encrypted: str, cipher: AESGCM) -> str:
+    """Decrypt a base64 string — mirrors main.py _decrypt_string() (F132)."""
+    raw = base64.b64decode(encrypted)
+    return cipher.decrypt(raw[:12], raw[12:], None).decode("utf-8")
+
+
+def encrypt_string(plaintext: str, cipher: AESGCM) -> str:
+    """Encrypt a string → base64 — mirrors main.py _encrypt_string() (F132)."""
+    nonce = os.urandom(12)
+    ciphertext = cipher.encrypt(nonce, plaintext.encode("utf-8"), None)
+    return base64.b64encode(nonce + ciphertext).decode("ascii")
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 
@@ -251,12 +264,29 @@ def main():
                 metadata = fdoc.get("metadata", {}) or {}
                 metadata["encryptionKeyVersion"] = args.target_version
 
+                # F132: filenames are encrypted at rest — re-encrypt under the new key.
+                # Legacy plaintext filenames are encrypted here as well, closing the gap.
+                metadata.pop("filename", None)
+                filename_encrypted = bool(metadata.get("filenameEncrypted"))
+                raw_name = fdoc.get("filename", "")
+                if filename_encrypted:
+                    try:
+                        plain_name = decrypt_string(raw_name, old_cipher)
+                    except Exception as e:
+                        print(f"  {RED}FAIL{NC} file '{fid_str}': cannot decrypt filename — {e}")
+                        file_failed += 1
+                        continue
+                else:
+                    plain_name = raw_name or "file"
+                new_name = encrypt_string(plain_name, new_cipher)
+                metadata["filenameEncrypted"] = True
+
                 # Replace: delete old gridFS entry, upload new with same metadata
                 fs.delete(fid)
                 fs.put(
                     new_data,
                     _id=fid,
-                    filename=fdoc.get("filename", ""),
+                    filename=new_name,
                     contentType=fdoc.get("contentType", ""),
                     metadata=metadata,
                     uploadDate=fdoc.get("uploadDate"),
