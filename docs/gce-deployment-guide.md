@@ -469,7 +469,7 @@ const API_BASE = 'https://api.kinlight.app';
 
 Change the API URL to `https://api.kinlight.app`.
 
-### 11g. `CLAUDE.md` — All Railway URL references (7 occurrences)
+### 11g. `docs/reference.md` — All Railway URL references (7 occurrences)
 
 Search and replace every `emergency-exit-production.up.railway.app` with `api.kinlight.app`. Lines affected: 23, 32, 42, 117, 257, 320, 460.
 

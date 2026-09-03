@@ -2,7 +2,7 @@
 
 > **Always loaded.** Read this before making any changes.
 > **Feature backlog:** `./docs/features.md` — status of all features (Must/Should/Could/Won't).
-> **Architecture, API, data model, conventions:** `./docs/reference.md` — full reference doc (WIP: migrating from CLAUDE.md).
+> **Architecture, API, data model, conventions:** `./docs/reference.md` — full reference doc.
 
 ---
 
@@ -77,7 +77,7 @@ cp manifest.json sw.js favicon.svg icon-192.png icon-512.png frontend/
 - **localStorage key:** `ee_v3` (vault data, offline cache)
 - **Session token:** `sessionStorage` (JWT, clears on tab close)
 - **Separate localStorage flags:** `ee_onboarded` (outside `ee_v3`)
-- **CSS vars:** `--p` (charcoal), `--ac` (sage), `--s` (linen cream), `--w` (warm white), `--am` (amber), `--er` (red), `--g` (gradient). Full table in CLAUDE.md.
+- **CSS vars:** `--p` (charcoal), `--ac` (sage), `--s` (linen cream), `--w` (warm white), `--am` (amber), `--er` (red), `--g` (gradient). Full table in `docs/reference.md`.
 - **Fonts:** Manrope (headlines, 800) + Public Sans (body)
 - **Mobile-first:** max-width 430px, min tap target 48px, border-radius 16px on cards
 
@@ -105,4 +105,4 @@ These will silently break the app:
 - JS helper aliases: `$(id)` for `document.getElementById`, `pl()`, `trunc()`, `initials()`, `authHeader()`, `esc()`.
 - Vault sync is silent — never show errors to the user.
 - All contacts receive the full package — no access level tiers.
-- For full conventions and the complete "What NOT to Do" list, see `./CLAUDE.md`.
+- For full conventions and the complete "What NOT to Do" list, see `./docs/reference.md`.

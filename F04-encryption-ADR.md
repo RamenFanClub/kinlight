@@ -173,7 +173,7 @@ The `VAULT_ENCRYPTION_KEY` (and all other runtime secrets — `MONGO_URI`, `JWT_
 
 ---
 
-## Backlog Entry (for CLAUDE.md)
+## Backlog Entry (for docs/reference.md)
 
 ```
 | F04 | Data encrypted at rest and in transit | Must | in-progress |
@@ -200,5 +200,5 @@ Future: per-user keys (deferred). CSFLE rejected. |
 - [ ] Write pytest tests for encrypt/decrypt round-trip
 - [ ] Write pytest test for plaintext-passthrough (migration scenario)
 - [ ] Write pytest test for tampered ciphertext detection
-- [ ] Update CLAUDE.md with F04 status and notes
+- [ ] Update docs/reference.md with F04 status and notes
 - [x] Document key backup procedure (F109 — `identity-service/scripts/backup-key.sh`, `restore-key.sh`, `rotate-key.py`)

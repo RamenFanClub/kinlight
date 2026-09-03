@@ -54,10 +54,10 @@ emergency-exit/
 ├── frontend/             # index.html (current), React (planned)
 ├── docs/                 # Architecture blueprint, feature register
 ├── docker-compose.yml    # Full stack orchestration
-└── CLAUDE.md             # AI assistant project context
+└── docs/reference.md     # AI assistant reference (architecture, API, conventions)
 ```
 
 ## Documentation
-- `CLAUDE.md` — Project context for AI assistants
+- `docs/reference.md` — Project reference for AI assistants (architecture, API, conventions)
 - `docs/Emergency_Exit_Technical_Blueprint.docx` — Full architecture
 - `docs/Emergency_Exit_Feature_Register.docx` — Feature tracking

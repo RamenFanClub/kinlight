@@ -1,7 +1,7 @@
 # Kinlight — Feature Backlog
 
 > **Source of truth for feature status.** Update this file when a feature's status changes.
-> For the full project specification (architecture, API, data model, conventions), see `../CLAUDE.md`.
+> For the full project specification (architecture, API, data model, conventions), see `./reference.md`.
 >
 > **Last groomed:** June 2026 — end-to-end UX review (see `ux-review-emergency-exit.md`). Added F61–F71. F55 elevated from Could to Must (moved to Must table). Three themes drove the new items: (1) false confidence — app can imply protection that doesn't exist (F61, F65); (2) broken promises — UI offers things that aren't built (F55, F64, F70); (3) recipient journey — delivery email is anonymous and untrusted (F62, F63, F68). Priority order for next sprint: ~~F55 (dropdown cleanup)~~ **done** → ~~F61 + F62 as one batch~~ **done** → ~~F63~~ **done** → ~~F64~~ **done** → F65. Pre-expansion gates: F66, F67, F68. Deferred unchanged: F07, F59, F39-5, F39-6.
 >

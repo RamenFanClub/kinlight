@@ -1,20 +1,10 @@
-# Kinlight — Project Specification & Memory (deprecated)
+# Kinlight — Reference
 
-> **DEPRECATED.** This file is being migrated into `AGENTS.md` (session rules) and
-> `docs/reference.md` (architecture, API, data model, conventions). Do not add new
-> content here — update the appropriate file in `docs/` or `AGENTS.md` instead.
-> **Feature backlog** lives in `docs/features.md` — update that file when statuses change.
-> **`opencode.json` no longer loads this file.**
+> **Architecture, API, data model, conventions** — the full reference doc.
+> Session rules and active checkpoints live in `../AGENTS.md`; feature status in `./features.md`.
+> File paths in this document are relative to the repository root.
 >
-> Both `./index.html` AND `./frontend/index.html` must always be kept in sync.
-
-> **SESSION START INSTRUCTION:** At the beginning of every new chat, always check
-> the project-level files synced from GitHub (CLAUDE.md and index.html). These are
-> the source of truth. Do not rely on memory summaries alone — read the actual
-> documents provided in context before making any assumptions about current state.
->
-> **Active checkpoint → `AGENTS.md`** — see `🔴 ACTIVE CHECKPOINT` for the current
-> in-progress task and next steps.
+> Both `index.html` AND `frontend/index.html` must always be kept in sync.
 
 ---
 
@@ -548,8 +538,8 @@ When building a new feature, add a new `class TestFeatureName` block to `test_ma
 
 - [ ] Download the new `main.py` (if changed)
 - [ ] Download the new `test_main.py` (if changed)
-- [ ] Download the new `CLAUDE.md`, `AGENTS.md`, `docs/features.md` (if changed)
-- [ ] Did anything structural change? Update `AGENTS.md` (session rules) or `CLAUDE.md` (full reference). Feature status changes → `docs/features.md`.
+- [ ] Download the new `docs/reference.md`, `AGENTS.md`, `docs/features.md` (if changed)
+- [ ] Did anything structural change? Update `AGENTS.md` (session rules) or `docs/reference.md` (full reference). Feature status changes → `docs/features.md`.
 - [ ] Replace `identity-service/main.py` in VS Code
 - [ ] Replace `identity-service/test_main.py` in VS Code
 - [ ] `cp index.html frontend/index.html && cp manifest.json sw.js favicon.svg icon-192.png icon-512.png frontend/`
