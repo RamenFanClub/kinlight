@@ -478,6 +478,32 @@ def _decrypt_string(encrypted: str) -> str:
     return cipher.decrypt(nonce, ciphertext, None).decode("utf-8")
 
 
+# ─── F133: USER PII ENCRYPTION ────────────────────────────────────────────────
+
+_USER_PII_FIELDS = ("name", "ageGroup", "notes")
+
+
+def _decrypt_user(user: dict) -> dict:
+    """
+    F133: Decrypt encrypted PII fields (name, ageGroup, notes) on a user doc.
+
+    Returns the same dict with those fields decrypted in place. Legacy docs
+    (no `piiEncrypted` flag) pass through unchanged. Each field is decrypted
+    defensively — a plaintext value (mixed state or legacy) is left as-is.
+    """
+    if not user or not user.get("piiEncrypted"):
+        return user
+    for field in _USER_PII_FIELDS:
+        value = user.get(field)
+        if isinstance(value, str) and value:
+            try:
+                user[field] = _decrypt_string(value)
+            except Exception:
+                pass
+    user["piiEncrypted"] = False
+    return user
+
+
 # ─── VAULT SCHEMA HELPERS ─────────────────────────────────────────────────────
 
 def extract_vault_fields(vault_blob: dict) -> dict:
@@ -578,7 +604,7 @@ def get_trusted_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"], options={"require": ["exp", "sub"]})
         if payload.get("role") != "trusted":
             raise HTTPException(status_code=401, detail="Not a trusted access token")
-        user = users_col.find_one({"_id": ObjectId(payload["sub"])})
+        user = _decrypt_user(users_col.find_one({"_id": ObjectId(payload["sub"])}))
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
         vault_doc = vaults_col.find_one({"userId": user["_id"]})
@@ -709,6 +735,7 @@ def clear_login_failures(email: str) -> None:
 
 def clean_user(user: dict) -> dict:
     """Strip sensitive fields before returning user data to the client."""
+    user = _decrypt_user(user)
     return {
         "id":       str(user["_id"]),
         "name":     user.get("name", ""),
@@ -729,7 +756,7 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     token = credentials.credentials
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"], options={"require": ["exp", "sub"]})
-        user = users_col.find_one({"_id": ObjectId(payload["sub"])})
+        user = _decrypt_user(users_col.find_one({"_id": ObjectId(payload["sub"])}))
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
         # F105: Validate token version against database — ensures tokens are
@@ -1501,7 +1528,7 @@ def run_pulse_scan() -> None:
         user_id = vault_doc.get("userId")
         if not user_id:
             continue
-        user = users_col.find_one({"_id": user_id})
+        user = _decrypt_user(users_col.find_one({"_id": user_id}))
         if not user:
             continue
 
@@ -1651,7 +1678,7 @@ def login(request: Request, body: dict) -> dict:
         logger.warning(f"Locked-out login attempt for email: {mask_email(email)}")
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    user = users_col.find_one({"email": email})
+    user = _decrypt_user(users_col.find_one({"email": email}))
     if not user or not check_password(password, user.get("password", "")):
         # F86: record the failure (only if the email actually exists — avoids
         # creating lockout records for non-existent emails, which would be a
@@ -1686,7 +1713,8 @@ def update_me(body: dict, current_user: dict = Depends(get_current_user)) -> dic
 
     name = body.get("name")
     if name is not None and isinstance(name, str) and name.strip():
-        updates["name"] = name.strip()
+        updates["name"] = _encrypt_string(name.strip())
+        updates["piiEncrypted"] = True
 
     email = body.get("email")
     if email is not None and isinstance(email, str) and email.strip():
@@ -1759,7 +1787,7 @@ def request_reset(request: Request, body: dict):
     if not email:
         return generic
 
-    user = users_col.find_one({"email": email})
+    user = _decrypt_user(users_col.find_one({"email": email}))
     if user is None or not user.get("email"):
         return generic
 
@@ -1950,7 +1978,7 @@ def webauthn_login_verify(request: Request, body: dict):
     if not stored:
         raise HTTPException(status_code=401, detail="Passkey not recognized")
 
-    user = users_col.find_one({"_id": stored["userId"]})
+    user = _decrypt_user(users_col.find_one({"_id": stored["userId"]}))
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
 
@@ -2383,7 +2411,7 @@ def trusted_access(request: Request, token: str = ""):
     if expires is None or ensure_utc(expires) <= now_utc():
         raise HTTPException(status_code=400, detail="This link has expired. Please ask the vault holder for a new one.")
 
-    user = users_col.find_one({"_id": link_doc["userId"]})
+    user = _decrypt_user(users_col.find_one({"_id": link_doc["userId"]}))
     if not user:
         raise HTTPException(status_code=404, detail="Vault holder not found")
     vault_doc = vaults_col.find_one({"userId": user["_id"]})

@@ -6,6 +6,23 @@
 
 ---
 
+## ✅ CHECKPOINT COMPLETE — F133 (Encrypt user PII at rest)
+
+> **Completed:** 03 Sep 2026
+> **Status:** Code complete (345 pytest tests pass).
+
+### What was built
+- **F133 (user PII encryption):** `users.name`, `users.ageGroup`, and `users.notes` are encrypted at rest (AES-256-GCM via the existing key, reusing `_encrypt_string`/`_decrypt_string`). A `piiEncrypted` flag on the user doc is the source of truth for decrypt-at-read vs legacy passthrough. `_decrypt_user()` decrypts in place and is applied at every fetch/read point: `clean_user` (defensive), `get_current_user`, `login`, `webauthn_login_verify`, `run_pulse_scan`, `request_reset`, `trusted_access`. `PATCH /auth/me` encrypts `name` on write.
+- **One-off migration:** `scripts/migrate_encrypt_user_pii.py` (`--dry-run` supported) encrypts existing plaintext `name`/`ageGroup`/`notes`.
+- **Key rotation:** `rotate-key.py` re-encrypts user PII fields during rotation.
+
+### Key reminders
+- `username` and `email` are **not** touched here — email is the login identifier + delivery target, handled by F139 (blind index). `username` is a legacy duplicate of email.
+- `_decrypt_user()` clears the in-memory `piiEncrypted` flag after decrypting (idempotent); it never writes back to Mongo. Writes are explicit `$set` field updates.
+- Legacy plaintext users pass through unchanged until the migration script runs.
+
+---
+
 ## ✅ CHECKPOINT COMPLETE — F132 (Encrypt GridFS filenames at rest)
 
 > **Completed:** 03 Sep 2026
@@ -69,7 +86,7 @@
 ## Before pushing
 
 ```bash
-./test.sh   # Runs pytest — must be 336 passed
+./test.sh   # Runs pytest — must be 345 passed
 cp index.html frontend/index.html   # Keep both copies in sync
 # Also sync PWA files (F100):
 cp manifest.json sw.js favicon.svg icon-192.png icon-512.png frontend/

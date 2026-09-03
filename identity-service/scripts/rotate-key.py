@@ -2,8 +2,9 @@
 """
 Kinlight — Encryption Key Rotation Script (F109)
 
-Migrates all vault content and GridFS files from the old VAULT_ENCRYPTION_KEY
-to a new one. Uses the same AES-256-GCM primitives as main.py.
+Migrates all vault content, GridFS files, and encrypted user PII fields (F133)
+from the old VAULT_ENCRYPTION_KEY to a new one. Uses the same AES-256-GCM
+primitives as main.py.
 
 Idempotent — marks each document with `encryptionKeyVersion` so re-runs skip
 already-migrated data.
@@ -294,6 +295,44 @@ def main():
 
             file_updated += 1
 
+    # ── user PII (F133) ──────────────────────────────────────────────────────
+
+    user_updated = 0
+    user_skipped = 0
+    user_plaintext = 0
+
+    user_docs = list(db.users.find({}))
+    for udoc in user_docs:
+        uid = udoc.get("_id")
+        current_version = udoc.get("encryptionKeyVersion", 0)
+
+        if current_version >= args.target_version:
+            user_skipped += 1
+            continue
+
+        if not udoc.get("piiEncrypted"):
+            # Legacy plaintext PII — handled by scripts/migrate_encrypt_user_pii.py.
+            user_plaintext += 1
+            continue
+
+        set_doc = {}
+        for field in ("name", "ageGroup", "notes"):
+            value = udoc.get(field)
+            if isinstance(value, str) and value:
+                try:
+                    plain_value = decrypt_string(value, old_cipher)
+                except Exception as e:
+                    print(f"  {RED}FAIL{NC} user '{uid}': cannot decrypt {field} — {e}")
+                    print(f"    This may mean old-key is wrong. Aborting.")
+                    sys.exit(1)
+                set_doc[field] = encrypt_string(plain_value, new_cipher)
+
+        if args.execute:
+            set_doc["encryptionKeyVersion"] = args.target_version
+            db.users.update_one({"_id": uid}, {"$set": set_doc})
+
+        user_updated += 1
+
     # ── summary ───────────────────────────────────────────────────────────────
 
     print(f"{BOLD}Summary:{NC}")
@@ -302,6 +341,12 @@ def main():
     if vault_plaintext:
         print(f"    (plaintext→encrypt: {vault_plaintext})")
     print(f"  Vaults skipped:       {vault_skipped}  (already at version {args.target_version} or no content)")
+
+    print(f"  Users processed:      {len(user_docs)}")
+    print(f"  Users rotated:        {user_updated}")
+    if user_plaintext:
+        print(f"    (legacy plaintext, left for migration: {user_plaintext})")
+    print(f"  Users skipped:        {user_skipped}  (already at version {args.target_version})")
 
     if not args.skip_files:
         print(f"  Files processed:      {len(file_docs)}")
@@ -315,7 +360,7 @@ def main():
         print(f"Run with {BOLD}--execute{NC} to apply the rotation.")
     else:
         print(f"\n{GREEN}Rotation complete.{NC}")
-        if vault_updated > 0 or file_updated > 0:
+        if vault_updated > 0 or file_updated > 0 or user_updated > 0:
             print(f"{BOLD}Next steps:{NC}")
             print(f"  1. Update VAULT_ENCRYPTION_KEY to the new key in ALL locations:")
             print(f"     — GCE VM Docker env (docker run -e VAULT_ENCRYPTION_KEY=...)")

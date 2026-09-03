@@ -54,6 +54,7 @@ from main import (
     decrypt_bytes,
     _encrypt_string,
     _decrypt_string,
+    _decrypt_user,
     send_notification_email,
     _download_and_decrypt,
     create_trusted_token,
@@ -2131,6 +2132,21 @@ class TestUpdateAccount:
         assert data["ok"] is True
         assert data["user"]["name"] == "New Name"
 
+    def test_updates_name_encrypts_at_rest(self):
+        uid = "aaaaaaaaaaaaaaaaaaaaaaaa"
+        user = {"_id": ObjectId(uid), "username": "tester", "name": "Old", "email": "old@test.com"}
+        updated = {**user, "name": "New Name"}
+        token = self._make_token(uid)
+        with patch("main.users_col") as mock_users:
+            mock_users.find_one.side_effect = [user, updated]
+            mock_users.update_one.return_value = None
+            r = self._patch({"name": "New Name"}, token)
+        assert r.status_code == 200
+        set_doc = mock_users.update_one.call_args[0][1]["$set"]
+        assert set_doc["piiEncrypted"] is True
+        assert set_doc["name"] != "New Name"
+        assert "New Name" not in set_doc["name"]
+
     def test_updates_email(self):
         uid = "aaaaaaaaaaaaaaaaaaaaaaaa"
         user = {"_id": ObjectId(uid), "username": "tester", "name": "Old", "email": "old@test.com"}
@@ -2576,6 +2592,67 @@ class TestEncryptString:
             _encrypt_string("Will.pdf")
         with pytest.raises(RuntimeError, match="VAULT_ENCRYPTION_KEY"):
             _decrypt_string("dGVzdA==")
+
+
+class TestDecryptUser:
+    """F133: user PII (name/ageGroup/notes) decryption at rest."""
+
+    def _user(self, **overrides):
+        from bson import ObjectId
+        user = {
+            "_id": ObjectId(),
+            "name": _encrypt_string("Anggi Bayu"),
+            "ageGroup": _encrypt_string("35-44"),
+            "notes": _encrypt_string("Prefers email contact"),
+            "email": "anggi@example.com",
+            "piiEncrypted": True,
+        }
+        user.update(overrides)
+        return user
+
+    def test_decrypts_all_fields(self):
+        user = self._user()
+        _decrypt_user(user)
+        assert user["name"] == "Anggi Bayu"
+        assert user["ageGroup"] == "35-44"
+        assert user["notes"] == "Prefers email contact"
+
+    def test_clears_flag(self):
+        user = self._user()
+        _decrypt_user(user)
+        assert user["piiEncrypted"] is False
+
+    def test_idempotent(self):
+        user = self._user()
+        _decrypt_user(user)
+        _decrypt_user(user)
+        assert user["name"] == "Anggi Bayu"
+
+    def test_legacy_plaintext_passthrough(self):
+        from bson import ObjectId
+        user = {"_id": ObjectId(), "name": "Legacy Name", "email": "x@y.com"}
+        _decrypt_user(user)
+        assert user["name"] == "Legacy Name"
+        assert "piiEncrypted" not in user
+
+    def test_missing_fields(self):
+        user = self._user(ageGroup=None, notes=None)
+        _decrypt_user(user)
+        assert user["name"] == "Anggi Bayu"
+
+    def test_mixed_state_leaves_plaintext(self):
+        user = self._user(ageGroup="plain-text-group")
+        _decrypt_user(user)
+        assert user["name"] == "Anggi Bayu"
+        assert user["ageGroup"] == "plain-text-group"
+
+    def test_none_passthrough(self):
+        assert _decrypt_user(None) is None
+
+    def test_clean_user_decrypts(self):
+        result = clean_user(self._user())
+        assert result["name"] == "Anggi Bayu"
+        assert result["ageGroup"] == "35-44"
 
 
 class TestValidateFilename:
