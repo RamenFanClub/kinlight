@@ -73,7 +73,7 @@ def main():
         set_doc["piiEncrypted"] = True
 
         if args.dry_run:
-            print(f"  [dry-run] user {uid} ({email}): would encrypt {sorted(set_doc) - {'piiEncrypted'}}")
+            print(f"  [dry-run] user {uid} ({email}): would encrypt {sorted(set(set_doc) - {'piiEncrypted'})}")
             migrated += 1
             continue
 

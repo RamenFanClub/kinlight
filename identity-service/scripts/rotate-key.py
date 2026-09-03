@@ -2,22 +2,21 @@
 """
 Kinlight — Encryption Key Rotation Script (F109)
 
-Migrates all vault content, GridFS files, and encrypted user PII fields (F133)
-from the old VAULT_ENCRYPTION_KEY to a new one. Uses the same AES-256-GCM
-primitives as main.py.
+Migrates all vault content, GridFS files, encrypted user PII (F133), device PII
+(F137), and push subscriptions (F138) from the old VAULT_ENCRYPTION_KEY to a new
+one. Uses the same AES-256-GCM primitives as main.py.
 
 Idempotent — marks each document with `encryptionKeyVersion` so re-runs skip
 already-migrated data.
 
-Usage:
+Usage (each line copyable on its own):
     # Dry run — shows what would change without writing
-    python3 rotate-key.py --old-key <64-char-hex> --new-key <64-char-hex>
+    python3 rotate-key.py --mongo-uri "mongodb+srv://..." --old-key <64-char-hex> --new-key <64-char-hex>
 
     # Execute the rotation
-    python3 rotate-key.py --old-key <64-char-hex> --new-key <64-char-hex> --execute
+    python3 rotate-key.py --mongo-uri "mongodb+srv://..." --old-key <64-char-hex> --new-key <64-char-hex> --execute
 
-Required env vars:
-    MONGO_URI — MongoDB Atlas connection string (same as the running server)
+MONGO_URI env var is used when --mongo-uri is omitted.
 
 Requires:
     pip install pymongo cryptography  (already in requirements.txt)
@@ -25,6 +24,8 @@ Requires:
 
 import argparse
 import base64
+import hashlib
+import hmac
 import json
 import os
 import sys
@@ -114,6 +115,13 @@ def encrypt_string(plaintext: str, cipher: AESGCM) -> str:
     return base64.b64encode(nonce + ciphertext).decode("ascii")
 
 
+def endpoint_blind_index(endpoint: str, key_hex: str) -> str:
+    """F138: keyed HMAC-SHA256 blind index of a push endpoint."""
+    key = bytes.fromhex(key_hex)
+    subkey = hmac.new(key, b"kinlight:push-endpoint:v1", hashlib.sha256).digest()
+    return hmac.new(subkey, endpoint.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 
@@ -145,6 +153,10 @@ def main():
         default=1,
         help="encryptionKeyVersion to set on migrated documents (default: 1).",
     )
+    parser.add_argument(
+        "--mongo-uri",
+        help="MongoDB connection string (overrides MONGO_URI env var).",
+    )
     args = parser.parse_args()
 
     # ── validate keys ─────────────────────────────────────────────────────────
@@ -160,9 +172,9 @@ def main():
 
     # ── connect to MongoDB ────────────────────────────────────────────────────
 
-    mongo_uri = os.environ.get("MONGO_URI", "")
+    mongo_uri = args.mongo_uri or os.environ.get("MONGO_URI", "")
     if not mongo_uri:
-        print(f"{RED}ERROR: MONGO_URI env var is not set.{NC}")
+        print(f"{RED}ERROR: MONGO_URI not set (use --mongo-uri or MONGO_URI env var).{NC}")
         sys.exit(1)
 
     client = MongoClient(mongo_uri, serverSelectionTimeoutMS=10000)
@@ -351,6 +363,90 @@ def main():
 
         user_updated += 1
 
+    # ── device PII (F137) ────────────────────────────────────────────────────
+
+    device_updated = 0
+    device_skipped = 0
+    device_plaintext = 0
+    cred_updated = 0
+
+    for ddoc in db["known_devices"].find({}):
+        did = ddoc.get("_id")
+        current_version = ddoc.get("encryptionKeyVersion", 0)
+        if current_version >= args.target_version:
+            device_skipped += 1
+            continue
+        if not ddoc.get("piiEncrypted"):
+            device_plaintext += 1
+            continue
+        set_doc = {}
+        for field in ("deviceName", "userAgent", "ip"):
+            value = ddoc.get(field)
+            if isinstance(value, str) and value:
+                try:
+                    set_doc[field] = encrypt_string(decrypt_string(value, old_cipher), new_cipher)
+                except Exception as e:
+                    print(f"  {RED}FAIL{NC} known_device '{did}': cannot decrypt {field} — {e}")
+                    sys.exit(1)
+        if args.execute:
+            set_doc["encryptionKeyVersion"] = args.target_version
+            db["known_devices"].update_one({"_id": did}, {"$set": set_doc})
+        device_updated += 1
+
+    for cdoc in db["webauthn_credentials"].find({}):
+        cid = cdoc.get("_id")
+        current_version = cdoc.get("encryptionKeyVersion", 0)
+        if current_version >= args.target_version:
+            continue
+        if not cdoc.get("piiEncrypted"):
+            continue
+        value = cdoc.get("deviceName")
+        if isinstance(value, str) and value:
+            try:
+                new_value = encrypt_string(decrypt_string(value, old_cipher), new_cipher)
+            except Exception as e:
+                print(f"  {RED}FAIL{NC} webauthn_credential '{cid}': cannot decrypt deviceName — {e}")
+                sys.exit(1)
+            if args.execute:
+                db["webauthn_credentials"].update_one(
+                    {"_id": cid},
+                    {"$set": {"deviceName": new_value, "encryptionKeyVersion": args.target_version}},
+                )
+            cred_updated += 1
+
+    # ── push subscriptions (F138) ────────────────────────────────────────────
+
+    push_updated = 0
+    push_skipped = 0
+    push_plaintext = 0
+
+    for pdoc in db["push_subscriptions"].find({}):
+        pid = pdoc.get("_id")
+        current_version = pdoc.get("encryptionKeyVersion", 0)
+        if current_version >= args.target_version:
+            push_skipped += 1
+            continue
+        if not pdoc.get("subscriptionEncrypted"):
+            push_plaintext += 1
+            continue
+        try:
+            subscription = json.loads(decrypt_string(pdoc["subscriptionEnc"], old_cipher))
+            new_blob = encrypt_string(json.dumps(subscription, separators=(",", ":")), new_cipher)
+            new_hash = endpoint_blind_index(subscription["endpoint"], args.new_key)
+        except Exception as e:
+            print(f"  {RED}FAIL{NC} push_subscription '{pid}': cannot decrypt — {e}")
+            sys.exit(1)
+        if args.execute:
+            db["push_subscriptions"].update_one(
+                {"_id": pid},
+                {"$set": {
+                    "subscriptionEnc": new_blob,
+                    "endpointHash": new_hash,
+                    "encryptionKeyVersion": args.target_version,
+                }},
+            )
+        push_updated += 1
+
     # ── summary ───────────────────────────────────────────────────────────────
 
     print(f"{BOLD}Summary:{NC}")
@@ -366,6 +462,14 @@ def main():
         print(f"    (legacy plaintext, left for migration: {user_plaintext})")
     print(f"  Users skipped:        {user_skipped}  (already at version {args.target_version})")
 
+    print(f"  Devices rotated:      {device_updated}")
+    if device_plaintext:
+        print(f"    (legacy plaintext, left for migration: {device_plaintext})")
+    print(f"  Credentials rotated:  {cred_updated}")
+    print(f"  Push subs rotated:    {push_updated}")
+    if push_plaintext:
+        print(f"    (legacy plaintext, left for migration: {push_plaintext})")
+
     if not args.skip_files:
         print(f"  Files processed:      {len(file_docs)}")
         print(f"  Files rotated:        {file_updated}")
@@ -378,7 +482,8 @@ def main():
         print(f"Run with {BOLD}--execute{NC} to apply the rotation.")
     else:
         print(f"\n{GREEN}Rotation complete.{NC}")
-        if vault_updated > 0 or file_updated > 0 or user_updated > 0:
+        if (vault_updated > 0 or file_updated > 0 or user_updated > 0
+                or device_updated > 0 or cred_updated > 0 or push_updated > 0):
             print(f"{BOLD}Next steps:{NC}")
             print(f"  1. Update VAULT_ENCRYPTION_KEY to the new key in ALL locations:")
             print(f"     — GCE VM Docker env (docker run -e VAULT_ENCRYPTION_KEY=...)")

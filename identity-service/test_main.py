@@ -55,6 +55,11 @@ from main import (
     _encrypt_string,
     _decrypt_string,
     _decrypt_user,
+    _decrypt_field,
+    _encrypt_device_fields,
+    _endpoint_blind_index,
+    _encrypt_push_subscription,
+    _decrypt_push_subscription,
     send_notification_email,
     _download_and_decrypt,
     create_trusted_token,
@@ -1733,6 +1738,58 @@ class TestAadBinding:
         assert decrypt_bytes(encrypted, "user-123") == data
 
 
+# ─── F137: DEVICE PII ENCRYPTION ──────────────────────────────────────────────
+
+class TestEncryptDevicePii:
+    """F137: device PII (deviceName/userAgent/ip) encryption at rest."""
+
+    def test_encrypt_device_fields(self):
+        fields = {"deviceName": "Anggi's iPhone", "userAgent": "Mozilla/5.0", "ip": "1.2.3.4"}
+        encrypted = _encrypt_device_fields(fields)
+        assert encrypted["piiEncrypted"] is True
+        for f in ("deviceName", "userAgent", "ip"):
+            assert encrypted[f] != fields[f]
+            assert fields[f] not in encrypted[f]
+
+    def test_encrypt_skips_empty(self):
+        encrypted = _encrypt_device_fields({"deviceName": "", "userAgent": "", "ip": ""})
+        assert encrypted == {"piiEncrypted": True}
+
+    def test_decrypt_field_round_trip(self):
+        name = "Anggi's iPhone"
+        doc = {"deviceName": _encrypt_string(name), "piiEncrypted": True}
+        assert _decrypt_field(doc, "deviceName") == name
+
+    def test_decrypt_field_legacy_passthrough(self):
+        doc = {"deviceName": "Legacy iPhone"}
+        assert _decrypt_field(doc, "deviceName") == "Legacy iPhone"
+
+
+# ─── F138: PUSH SUBSCRIPTION ENCRYPTION ───────────────────────────────────────
+
+class TestEncryptPushSubs:
+    """F138: push subscription blob encryption + endpoint blind index."""
+
+    def test_blind_index_deterministic(self):
+        ep = "https://push.example.com/abc"
+        assert _endpoint_blind_index(ep) == _endpoint_blind_index(ep)
+
+    def test_blind_index_differs_by_endpoint(self):
+        assert _endpoint_blind_index("https://x/1") != _endpoint_blind_index("https://x/2")
+
+    def test_subscription_round_trip(self):
+        sub = {"endpoint": "https://push.example.com/abc", "keys": {"p256dh": "k1", "auth": "k2"}}
+        enc = _encrypt_push_subscription(sub)
+        assert enc != "https://push.example.com/abc"
+        doc = {"subscriptionEnc": enc, "subscriptionEncrypted": True}
+        assert _decrypt_push_subscription(doc) == sub
+
+    def test_subscription_legacy_passthrough(self):
+        sub = {"endpoint": "https://push.example.com/abc", "keys": {"p256dh": "k1"}}
+        doc = {"subscription": sub}
+        assert _decrypt_push_subscription(doc) == sub
+
+
 # ─── F122: GCP SECRET MANAGER LOADER ─────────────────────────────────────────
 
 class TestSecretManagerLoader:
@@ -2293,6 +2350,21 @@ class TestPushNotifications:
             r = self._post("/push/subscribe", {"subscription": sub}, token)
         assert r.status_code == 200
         assert r.json()["ok"] is True
+
+    def test_subscribe_encrypts_subscription_at_rest(self):
+        token = self._token()
+        sub = {"endpoint": "https://push.example.com/abc", "keys": {"p256dh": "key1", "auth": "key2"}}
+        user = {"_id": ObjectId("aaaaaaaaaaaaaaaaaaaaaaaa"), "username": "tester", "name": "Test"}
+        with patch("main.users_col") as mock_users, patch("main.push_subs_col") as mock_subs:
+            mock_users.find_one.return_value = user
+            mock_subs.find_one.return_value = None
+            r = self._post("/push/subscribe", {"subscription": sub}, token)
+        assert r.status_code == 200
+        doc = mock_subs.insert_one.call_args[0][0]
+        assert doc["subscriptionEncrypted"] is True
+        assert "subscriptionEnc" in doc
+        assert "subscription" not in doc
+        assert doc["endpointHash"] == _endpoint_blind_index("https://push.example.com/abc")
 
     def test_subscribe_updates_existing_subscription(self):
         token = self._token()
@@ -3651,6 +3723,24 @@ class TestWebAuthn:
         assert r.status_code == 200
         assert r.json()["ok"] is True
         assert r.json()["credentials"][0]["id"] == "credid"
+
+    def test_list_credentials_decrypts_device_name(self):
+        token = self._token()
+        cred = {
+            "credentialId": "credid",
+            "deviceName": _encrypt_string("Anggi's iPhone"),
+            "piiEncrypted": True,
+            "createdAt": datetime.now(timezone.utc),
+            "lastUsedAt": None,
+        }
+        with patch("main.users_col") as mock_users, patch("main.webauthn_creds_col") as mock_creds:
+            mock_users.find_one.return_value = self._user()
+            mock_creds.find.return_value.sort.return_value = [cred]
+            r = TestClient(main.app).get(
+                "/auth/webauthn/credentials", headers=self._auth_headers(token),
+            )
+        assert r.status_code == 200
+        assert r.json()["credentials"][0]["deviceName"] == "Anggi's iPhone"
 
     def test_delete_credential_removes_and_syncs_flag(self):
         token = self._token()

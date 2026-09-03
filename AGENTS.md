@@ -6,6 +6,24 @@
 
 ---
 
+## ✅ CHECKPOINT COMPLETE — F137 + F138 (Device PII + push subscriptions at rest)
+
+> **Completed:** 03 Sep 2026
+> **Status:** Code complete (361 pytest tests pass).
+
+### What was built
+- **F137 (device PII):** `known_devices.deviceName`/`userAgent`/`ip` and `webauthn_credentials.deviceName` are encrypted at rest (`_encrypt_string`), gated by `piiEncrypted`. `register_device_login` + `webauthn_register_verify` encrypt on write; `webauthn_list_credentials` decrypts via `_decrypt_field`. `deviceId`/`userId`/timestamps stay plaintext (lookup keys / not PII).
+- **F138 (push subscriptions):** the whole `subscription` JSON is encrypted (`_encrypt_string`, `subscriptionEncrypted` flag) + a keyed `endpointHash` (HMAC-SHA256 blind index, subkey derived from `VAULT_ENCRYPTION_KEY`). `push_subscribe` dedupes by `endpointHash`; `push_unsubscribe` deletes by `endpointHash`; `send_push_to_user` decrypts via `_decrypt_push_subscription`.
+- **Migrations:** `scripts/migrate_encrypt_device_pii.py` and `scripts/migrate_encrypt_push_subs.py` (`--dry-run`).
+- **Key rotation:** `rotate-key.py` re-encrypts device PII and push blobs, and recomputes `endpointHash` (the blind-index key derives from `VAULT_ENCRYPTION_KEY`, so it must rotate too).
+
+### Key reminders
+- The push blind-index subkey is `HMAC-SHA256(VAULT_ENCRYPTION_KEY, "kinlight:push-endpoint:v1")`; `endpointHash = HMAC-SHA256(subkey, endpoint)`. Must stay in sync between `main.py`, `migrate_encrypt_push_subs.py`, and `rotate-key.py`.
+- `known_devices.deviceName` has no display path today — it's encrypted on write only; the update path only rewrites it when a new `device_name` is supplied.
+- `webauthn_credentials.deviceName` (the Settings "Passkeys" card label) is the actual device-PII display path.
+
+---
+
 ## ✅ CHECKPOINT COMPLETE — F134 (Bind encrypted blobs to user via GCM AAD)
 
 > **Completed:** 03 Sep 2026
@@ -104,7 +122,7 @@
 ## Before pushing
 
 ```bash
-./test.sh   # Runs pytest — must be 351 passed
+./test.sh   # Runs pytest — must be 361 passed
 cp index.html frontend/index.html   # Keep both copies in sync
 # Also sync PWA files (F100):
 cp manifest.json sw.js favicon.svg icon-192.png icon-512.png frontend/

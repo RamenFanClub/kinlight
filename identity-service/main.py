@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 import base64
 import hashlib
+import hmac
 import io
 import json
 import os
@@ -537,6 +538,61 @@ def _decrypt_vault_content(vault_doc: dict) -> dict:
     )
 
 
+# ─── F137: DEVICE PII ENCRYPTION ──────────────────────────────────────────────
+
+_DEVICE_PII_FIELDS = ("deviceName", "userAgent", "ip")
+
+
+def _encrypt_device_fields(fields: dict) -> dict:
+    """F137: encrypt non-empty device PII fields → dict of encrypted values + flag."""
+    out = {}
+    for field in _DEVICE_PII_FIELDS:
+        value = fields.get(field)
+        if isinstance(value, str) and value:
+            out[field] = _encrypt_string(value)
+    out["piiEncrypted"] = True
+    return out
+
+
+def _decrypt_field(doc: dict, field: str) -> str:
+    """F137: decrypt a single encrypted PII field on a doc (legacy passthrough)."""
+    value = doc.get(field, "")
+    if not doc.get("piiEncrypted"):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            return _decrypt_string(value)
+        except Exception:
+            return value
+    return value
+
+
+# ─── F138: PUSH SUBSCRIPTION ENCRYPTION ───────────────────────────────────────
+
+def _endpoint_blind_index(endpoint: str) -> str:
+    """F138: keyed HMAC-SHA256 blind index of a push endpoint (deterministic)."""
+    if not VAULT_ENCRYPTION_KEY:
+        return hashlib.sha256(endpoint.encode("utf-8")).hexdigest()
+    key = bytes.fromhex(VAULT_ENCRYPTION_KEY)
+    subkey = hmac.new(key, b"kinlight:push-endpoint:v1", hashlib.sha256).digest()
+    return hmac.new(subkey, endpoint.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _encrypt_push_subscription(subscription: dict) -> str:
+    """F138: encrypt a push subscription JSON blob."""
+    return _encrypt_string(json.dumps(subscription, separators=(",", ":")))
+
+
+def _decrypt_push_subscription(sub: dict) -> dict:
+    """F138: return a push subscription doc's plaintext subscription dict."""
+    if sub.get("subscriptionEncrypted"):
+        try:
+            return json.loads(_decrypt_string(sub["subscriptionEnc"]))
+        except Exception:
+            return {}
+    return sub.get("subscription", {})
+
+
 # ─── VAULT SCHEMA HELPERS ─────────────────────────────────────────────────────
 
 def extract_vault_fields(vault_blob: dict) -> dict:
@@ -887,19 +943,21 @@ def register_device_login(user: dict, device_id: str, device_name: str, request:
 
     existing = known_devices_col.find_one({"userId": user_id, "deviceId": device_id})
     if existing:
-        known_devices_col.update_one(
-            {"_id": existing["_id"]},
-            {"$set": {"lastSeenAt": now, "deviceName": device_name or existing.get("deviceName", "")}},
-        )
+        update = {"lastSeenAt": now}
+        if device_name:
+            update["deviceName"] = _encrypt_string(device_name)
+        known_devices_col.update_one({"_id": existing["_id"]}, {"$set": update})
         return
 
     label = device_name or _device_label(user_agent)
     known_devices_col.insert_one({
         "userId":     user_id,
         "deviceId":   device_id,
-        "deviceName": label,
-        "userAgent":  user_agent,
-        "ip":         ip,
+        **_encrypt_device_fields({
+            "deviceName": label,
+            "userAgent":  user_agent,
+            "ip":         ip,
+        }),
         "firstSeenAt": now,
         "lastSeenAt":  now,
     })
@@ -1462,7 +1520,7 @@ def send_push_to_user(user_id, title: str, body: str, tag: str = "kinlight",
     for sub in subs:
         try:
             pywebpush_send(
-                subscription_info=sub["subscription"],
+                subscription_info=_decrypt_push_subscription(sub),
                 data=json.dumps({
                     "title": title,
                     "body": body,
@@ -1945,13 +2003,15 @@ def webauthn_register_verify(body: dict, current_user: dict = Depends(get_curren
         transports = credential.get("response", {}).get("transports") or credential.get("transports") or []
 
     now = now_utc()
+    device_name = body.get("deviceName", "")
     webauthn_creds_col.insert_one({
         "userId":       current_user["_id"],
         "credentialId": credential_id_b64,
         "publicKey":    bytes_to_base64url(verified.credential_public_key),
         "signCount":    verified.sign_count,
         "transports":   list(transports),
-        "deviceName":   body.get("deviceName", ""),
+        "deviceName":   _encrypt_string(device_name) if device_name else "",
+        "piiEncrypted": True,
         "createdAt":    now,
         "lastUsedAt":   None,
     })
@@ -2055,7 +2115,7 @@ def webauthn_list_credentials(current_user: dict = Depends(get_current_user)):
         "credentials": [
             {
                 "id": c["credentialId"],
-                "deviceName": c.get("deviceName", ""),
+                "deviceName": _decrypt_field(c, "deviceName"),
                 "createdAt": c.get("createdAt").isoformat() if c.get("createdAt") else None,
                 "lastUsedAt": c.get("lastUsedAt").isoformat() if c.get("lastUsedAt") else None,
             }
@@ -2498,17 +2558,23 @@ def push_subscribe(payload: dict, current_user: dict = Depends(get_current_user)
     if not subscription or not subscription.get("endpoint"):
         raise HTTPException(status_code=400, detail="Invalid subscription")
     user_id = current_user["_id"]
-    endpoint = subscription["endpoint"]
-    existing = push_subs_col.find_one({"userId": user_id, "subscription.endpoint": endpoint})
+    endpoint_hash = _endpoint_blind_index(subscription["endpoint"])
+    existing = push_subs_col.find_one({"userId": user_id, "endpointHash": endpoint_hash})
     if existing:
         push_subs_col.update_one(
             {"_id": existing["_id"]},
-            {"$set": {"subscription": subscription, "updatedAt": now_utc()}},
+            {"$set": {
+                "subscriptionEnc": _encrypt_push_subscription(subscription),
+                "subscriptionEncrypted": True,
+                "updatedAt": now_utc(),
+            }},
         )
     else:
         push_subs_col.insert_one({
             "userId":       user_id,
-            "subscription": subscription,
+            "endpointHash": endpoint_hash,
+            "subscriptionEnc": _encrypt_push_subscription(subscription),
+            "subscriptionEncrypted": True,
             "createdAt":    now_utc(),
             "updatedAt":    now_utc(),
         })
@@ -2523,7 +2589,7 @@ def push_unsubscribe(payload: dict, current_user: dict = Depends(get_current_use
         return {"ok": True}
     endpoint = payload.get("endpoint", "")
     if endpoint:
-        push_subs_col.delete_many({"userId": current_user["_id"], "subscription.endpoint": endpoint})
+        push_subs_col.delete_many({"userId": current_user["_id"], "endpointHash": _endpoint_blind_index(endpoint)})
         logger.info(f"F101: Push subscription removed for {mask_email(str(current_user['_id']))}")
     return {"ok": True}
 
