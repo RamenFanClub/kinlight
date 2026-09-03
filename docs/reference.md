@@ -381,10 +381,9 @@ ee_onboarded: 'true'   ← set on first dismissal of F44 explainer card. Persist
   notifyProto: String,
   overdueNotificationSent: Boolean,  ← indexed (compound with lastCheckin)
   reminderSent: Boolean,             ← F60: prevents duplicate reminder emails per cycle; reset on check-in
-  content: {                     ← vault data — always read/written together → embedded
-    assets, wishes, will, suppDocs, kin, v, notifySeq, saveCount
+  content: {                     ← vault data — AES-256-GCM encrypted at rest (F04); read/written together
+    assets, wishes, will, suppDocs, kin, v, notifySeq, saveCount, pushSubscribed, log
   },
-  log: [...],                    ← capped at 20 entries in frontend — safe to embed
   syncedAt: ISODate,
   createdAt: ISODate,
   updatedAt: ISODate
@@ -394,7 +393,7 @@ ee_onboarded: 'true'   ← set on first dismissal of F44 explainer card. Persist
 #### Schema design decisions (MongoDB best practices)
 - **Check-in fields at top level** — `lastCheckin`, `gracePeriodDays`, `overdueNotificationSent`, `reminderSent` are queried by the pulse scanner every hour. Top-level = indexable = fast.
 - **Vault content embedded** — assets, wishes, contacts always read and written together → embed, don't reference.
-- **Log embedded** — bounded at 20 entries in frontend JS, always read with vault → safe to embed.
+- **Log embedded (encrypted)** — `log` lives inside `content` (F131), so it is AES-256-GCM encrypted at rest like the rest of the vault data. Bounded at 20 entries in frontend JS.
 - **Revisit log schema when:** building an audit trail, admin dashboard, or unlimited history feature. At that point, move logs to a separate `logs` collection with `userId`, `event`, `detail`, `timestamp` fields.
 - **Backward compatibility** — old vault docs (pre-F41) stored content in a `vault` blob field. All fallback lookups use explicit `None` checks (not `or`) to handle empty arrays correctly.
 

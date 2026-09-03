@@ -500,7 +500,7 @@ def reconstruct_vault_blob(doc: dict) -> dict:
         "notifyProto": doc.get("notifyProto", "ping_then_notify"),
         "trustedEnabled": doc.get("trustedEnabled", False),
         "pushSubscribed": content.get("pushSubscribed", False),
-        "log":         doc.get("log", []),
+        "log":         content.get("log", doc.get("log", [])),
     }
 
 
@@ -2039,6 +2039,7 @@ def vault_sync(body: dict, current_user: dict = Depends(get_current_user)) -> di
         "notifySeq": vault_blob.get("notifySeq", "in_order"),
         "saveCount": vault_blob.get("saveCount", 0),
         "pushSubscribed": vault_blob.get("pushSubscribed", False),
+        "log":         vault_blob.get("log", [])[-20:],
     }
 
     # F04: encrypt vault content before storage
@@ -2050,7 +2051,6 @@ def vault_sync(body: dict, current_user: dict = Depends(get_current_user)) -> di
             "$set": {
                 **extract_vault_fields(vault_blob),
                 "content":   stored_content,
-                "log":       vault_blob.get("log", [])[-20:],
                 "syncedAt":  now,
                 "updatedAt": now,
             },
@@ -2060,6 +2060,8 @@ def vault_sync(body: dict, current_user: dict = Depends(get_current_user)) -> di
                 "reminderSent":            False,
                 "warningSentDays":         [],
             },
+            # F131: clear the legacy plaintext log field (now lives in content)
+            "$unset": {"log": ""},
         },
         upsert=True,
     )

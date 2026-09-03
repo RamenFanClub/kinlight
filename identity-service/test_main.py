@@ -219,6 +219,18 @@ class TestReconstructVaultBlob:
         result = reconstruct_vault_blob(self._doc())
         assert result["pushSubscribed"] is False
 
+    def test_log_from_content(self):
+        doc = self._doc()
+        doc["content"]["log"] = [{"msg": "Contact added", "time": "x"}]
+        result = reconstruct_vault_blob(doc)
+        assert result["log"] == [{"msg": "Contact added", "time": "x"}]
+
+    def test_log_falls_back_to_legacy_field(self):
+        doc = self._doc()
+        doc["log"] = [{"msg": "legacy", "time": "y"}]
+        result = reconstruct_vault_blob(doc)
+        assert result["log"] == [{"msg": "legacy", "time": "y"}]
+
 
 # ─── NOTIFICATION PROTOCOL ────────────────────────────────────────────────────
 
@@ -1536,6 +1548,32 @@ class TestVaultSyncLimits:
         from fastapi import HTTPException
         if isinstance(exc_info.value, HTTPException):
             assert exc_info.value.status_code != 400
+
+
+class TestVaultSyncLogEncryption:
+    """F131: the activity log is encrypted inside content, not stored plaintext."""
+
+    def test_log_stored_inside_encrypted_content(self):
+        from main import vault_sync, decrypt_content
+        body = {"vault": {"assets": [], "kin": [], "log": [{"msg": "Contact added: David", "time": "x"}]}}
+        with patch("main.vaults_col") as mock_vaults, patch("main.trusted_links_col", None):
+            mock_vaults.update_one.return_value = None
+            vault_sync(body, {"_id": "test"})
+        update_kwargs = mock_vaults.update_one.call_args[0][1]
+        assert "log" not in update_kwargs["$set"]
+        assert update_kwargs["$unset"] == {"log": ""}
+        decrypted = decrypt_content(update_kwargs["$set"]["content"])
+        assert decrypted["log"] == [{"msg": "Contact added: David", "time": "x"}]
+
+    def test_log_capped_at_20(self):
+        from main import vault_sync, decrypt_content
+        logs = [{"msg": f"m{i}", "time": "x"} for i in range(25)]
+        body = {"vault": {"assets": [], "kin": [], "log": logs}}
+        with patch("main.vaults_col") as mock_vaults, patch("main.trusted_links_col", None):
+            mock_vaults.update_one.return_value = None
+            vault_sync(body, {"_id": "test"})
+        decrypted = decrypt_content(mock_vaults.update_one.call_args[0][1]["$set"]["content"])
+        assert len(decrypted["log"]) == 20
 
 
 # ─── F97: Stronger Password Policy ──────────────────────────────────────────
