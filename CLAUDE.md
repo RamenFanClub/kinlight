@@ -37,7 +37,7 @@ The `index.html` includes a login wall:
 - **Enter key** submits the login form
 - **Session persistence** — if token exists in sessionStorage, login wall is skipped
 - **Tester account:** tester_01 (only test account after F80 consolidation), password `Benny#07`
-- **Admin account:** `anggi` (F77) — separate from the tester pool, `isAdmin: true`, `isTester: false`. This is Anggi's personal/live account, used to build out a real vault and to access `/admin/*` endpoints. Currently uses the same temporary password as testers (`Benny#07`) — needs a unique password before launch.
+- **Admin account:** `anggi` (F77) — separate from the tester pool, `isAdmin: true`, `isTester: false`. This is Anggi's personal/live account, used to build out a real vault and to access `/admin/*` endpoints. Has a unique password (no longer the shared test password).
 
 ### Key element IDs for login:
 - `#login-wall` — the full-screen login overlay
@@ -415,7 +415,7 @@ notes, isTester, isAdmin, hasPasskey, tokenVersion, failedLoginCount,
 lockedUntil, createdAt, lastLogin
 ```
 **Tester account:** tester_01 (single remaining test account after F80). Password is a bcrypt hash of `Benny#07`. No `isAdmin` field (defaults to `false`).
-**Admin account:** `anggi` — `isTester: false`, `isAdmin: true`. Added F77. ⚠️ Currently shares the same temporary password as testers (`Benny#07`) — change before launch.
+**Admin account:** `anggi` — `isTester: false`, `isAdmin: true`. Added F77. Has a unique password (no longer the shared test password).
 
 ### Additional collections (F115/F117/F118)
 - `trusted_links` — single-use trusted-person magic links (F115)
