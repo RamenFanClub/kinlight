@@ -36,7 +36,7 @@ The `index.html` includes a login wall:
 - **API calls** point to `https://api.kinlight.app`
 - **Enter key** submits the login form
 - **Session persistence** — if token exists in sessionStorage, login wall is skipped
-- **Tester accounts:** tester_01 through tester_06, all share password `Benny#07`
+- **Tester account:** tester_01 (only test account after F80 consolidation), password `Benny#07`
 - **Admin account:** `anggi` (F77) — separate from the tester pool, `isAdmin: true`, `isTester: false`. This is Anggi's personal/live account, used to build out a real vault and to access `/admin/*` endpoints. Currently uses the same temporary password as testers (`Benny#07`) — needs a unique password before launch.
 
 ### Key element IDs for login:
@@ -414,7 +414,7 @@ _id, username, password (bcrypt hash), name, ageGroup, hasWill,
 notes, isTester, isAdmin, hasPasskey, tokenVersion, failedLoginCount,
 lockedUntil, createdAt, lastLogin
 ```
-**Tester accounts:** tester_01 through tester_06. All passwords updated to bcrypt hash of `Benny#07`. No `isAdmin` field (defaults to `false`).
+**Tester account:** tester_01 (single remaining test account after F80). Password is a bcrypt hash of `Benny#07`. No `isAdmin` field (defaults to `false`).
 **Admin account:** `anggi` — `isTester: false`, `isAdmin: true`. Added F77. ⚠️ Currently shares the same temporary password as testers (`Benny#07`) — change before launch.
 
 ### Additional collections (F115/F117/F118)
