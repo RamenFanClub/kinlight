@@ -2,8 +2,8 @@
 # Cloudflare DDNS updater — keeps api.kinlight.app pointed at this VM's ephemeral IP.
 # Credentials are read from /opt/ddns/cloudflare.env (root-only, 0600).
 #
-# Global API Key auth (X-Auth-Email + X-Auth-Key). For a scoped "Edit zone DNS"
-# token, replace the AUTH line below with:  AUTH=(-H "Authorization: Bearer $CF_TOKEN")
+# Auth: prefer a scoped "Edit zone DNS" token (CF_TOKEN). Falls back to the
+# account-wide Global API Key (CF_EMAIL + CF_KEY) when no token is set.
 
 set -u
 
@@ -17,9 +17,6 @@ if [ -f "$ENV_FILE" ]; then
   . "$ENV_FILE"
 fi
 
-: "${CF_EMAIL:?CF_EMAIL not set — add it to /opt/ddns/cloudflare.env}"
-: "${CF_KEY:?CF_KEY not set — add it to /opt/ddns/cloudflare.env}"
-
 # Resolve the public IPv4, trying a fallback chain of providers.
 CURRENT_IP=""
 for url in https://ifconfig.me https://api.ipify.org https://icanhazip.com; do
@@ -31,14 +28,21 @@ if [ -z "$CURRENT_IP" ]; then
   exit 1
 fi
 
-AUTH=(-H "X-Auth-Email: $CF_EMAIL" -H "X-Auth-Key: $CF_KEY")
+if [ -n "${CF_TOKEN:-}" ]; then
+  AUTH=(-H "Authorization: Bearer $CF_TOKEN")
+elif [ -n "${CF_EMAIL:-}" ] && [ -n "${CF_KEY:-}" ]; then
+  AUTH=(-H "X-Auth-Email: $CF_EMAIL" -H "X-Auth-Key: $CF_KEY")
+else
+  echo "$(date): CF_TOKEN or (CF_EMAIL + CF_KEY) must be set in $ENV_FILE" >&2
+  exit 1
+fi
 
 ZONE_ID=$(curl -sf "${AUTH[@]}" \
   "https://api.cloudflare.com/client/v4/zones?name=$ZONE" | \
   python3 -c "import sys,json; d=json.load(sys.stdin); print(d['result'][0]['id'] if d.get('success') and d.get('result') else '')")
 
 if [ -z "$ZONE_ID" ]; then
-  echo "$(date): zone $ZONE not found — check CF_EMAIL/CF_KEY" >&2
+  echo "$(date): zone $ZONE not found — check your Cloudflare credentials" >&2
   exit 1
 fi
 
