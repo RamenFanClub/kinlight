@@ -27,6 +27,8 @@ _SECRET_MAP = (
     ("MONGO_URI", "kinlight-mongo-uri"),
     ("VAULT_ENCRYPTION_KEY", "kinlight-vault-encryption-key"),
     ("JWT_SECRET", "kinlight-jwt-secret"),
+    ("KINLIGHT_ADMIN_EMAIL", "kinlight-admin-email"),
+    ("KINLIGHT_ADMIN_PASSWORD", "kinlight-admin-password"),
 )
 
 
