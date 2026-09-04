@@ -60,16 +60,31 @@ def _fetch_secret(project_id: str, token: str, secret_name: str) -> str:
 def load_secrets(project_id: str = None, names=("MONGO_URI", "VAULT_ENCRYPTION_KEY", "JWT_SECRET")) -> None:
     """Populate os.environ for the mapped secrets, unless already set (env wins).
 
-    `names` restricts which secrets to fetch. When `project_id` is empty, it is
-    auto-discovered from the instance metadata server (so the caller never has to
-    put the project ID on the command line). No-op if discovery fails (e.g. local
-    runs fall back to env vars).
+    `names` restricts which secrets to fetch. The project ID is resolved in this
+    order: explicit argument → GCP_PROJECT_ID env var → instance-metadata-server
+    discovery (so callers never have to put the project ID on the command line).
+    No-op (with a clear warning) if it cannot be resolved — e.g. local runs fall
+    back to env vars for the secrets themselves.
     """
     if not project_id:
-        project_id = _discover_project_id()
+        project_id = os.environ.get("GCP_PROJECT_ID", "")
+    discovered = False
     if not project_id:
+        project_id = _discover_project_id()
+        discovered = bool(project_id)
+    if not project_id:
+        print("  [WARN] no GCP project ID resolvable (not on GCE?); "
+              "pass --gcp-project-id, set GCP_PROJECT_ID, or set MONGO_URI/VAULT_ENCRYPTION_KEY directly.")
         return
-    token = _fetch_token()
+
+    source = "discovered from metadata server" if discovered else "provided"
+    print(f"  using GCP project ID {project_id!r} ({source})")
+
+    try:
+        token = _fetch_token()
+    except Exception as exc:
+        print(f"  [WARN] metadata token fetch failed ({exc}); falling back to env vars.")
+        return
     for env_name, secret_name in _SECRET_MAP:
         if env_name not in names:
             continue
