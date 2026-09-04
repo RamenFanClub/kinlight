@@ -24,15 +24,12 @@ On the GCE VM, secrets are self-fetched from Secret Manager automatically
 """
 
 import argparse
-import os
 
 from bson import ObjectId
 from gridfs import GridFS
-from pymongo import MongoClient
 
 from _gcp_secrets import load_secrets
-
-DB_NAME = "emergency_exit"
+from _mongo import connect
 
 _REFERENCE_COLLECTIONS = (
     "vaults",
@@ -42,14 +39,6 @@ _REFERENCE_COLLECTIONS = (
     "webauthn_credentials",
     "password_resets",
 )
-
-
-def _connect():
-    mongo_uri = os.environ.get("MONGO_URI")
-    if not mongo_uri:
-        raise SystemExit("ERROR: MONGO_URI environment variable not set.")
-    client = MongoClient(mongo_uri)
-    return client, client[DB_NAME]
 
 
 def _orphaned_ids(db):
@@ -141,7 +130,7 @@ def main():
     args = parser.parse_args()
 
     load_secrets(args.gcp_project_id, names=("MONGO_URI",))
-    client, db = _connect()
+    db = connect()
 
     valid_str, orphaned = _orphaned_ids(db)
     legacy = _legacy_vault_docs(db)
@@ -161,11 +150,9 @@ def main():
 
     if not args.delete:
         print("\nNo changes made. To execute, run: --delete --yes")
-        client.close()
         return
 
     if not args.yes:
-        client.close()
         raise SystemExit("ERROR: --delete requires --yes to confirm.")
 
     # ── Phase A: delete orphaned data ─────────────────────────────────────────
@@ -185,7 +172,6 @@ def main():
             print(f"  SKIP {doc.get('_id')}: has legacy 'vault' but no 'content' — left untouched")
 
     print(f"\nDone. {len(orphaned)} orphaned id(s) removed; {unset_count} legacy 'vault' field(s) unset.")
-    client.close()
 
 
 if __name__ == "__main__":

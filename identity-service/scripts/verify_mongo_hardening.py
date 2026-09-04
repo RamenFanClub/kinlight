@@ -31,16 +31,12 @@ Exit code is non-zero if any check fails.
 
 import argparse
 import base64
-import json
 import os
 import re
 import sys
 
-from pymongo import MongoClient
-
 from _gcp_secrets import load_secrets
-
-DB_NAME = "emergency_exit"
+from _mongo import DB_NAME, connect
 
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 AU_PHONE_RE = re.compile(r"(?:\+?61|0)4\d{8}")
@@ -136,13 +132,6 @@ def is_sha256_hex(value) -> bool:
 
 def is_bcrypt(value) -> bool:
     return isinstance(value, str) and (value.startswith("$2b$") or value.startswith("$2a$"))
-
-
-def connect(db_name, mongo_uri):
-    mongo_uri = mongo_uri or os.environ.get("MONGO_URI")
-    if not mongo_uri:
-        raise SystemExit("ERROR: MONGO_URI not set (use --mongo-uri or MONGO_URI env var).")
-    return MongoClient(mongo_uri, serverSelectionTimeoutMS=10000)[db_name]
 
 
 # ── S0: scope & baseline ──────────────────────────────────────────────────────
@@ -390,7 +379,7 @@ def main():
     key = args.key or os.environ.get("VAULT_ENCRYPTION_KEY", "")
     jwt_secret = args.jwt_secret or os.environ.get("JWT_SECRET", "")
 
-    db = connect(args.db_name, args.mongo_uri)
+    db = connect(args.mongo_uri, args.db_name)
 
     slices = {
         "S0": lambda: slice_scope(db),

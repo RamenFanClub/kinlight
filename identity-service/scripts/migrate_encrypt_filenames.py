@@ -21,35 +21,9 @@ Run from identity-service/:
 """
 
 import argparse
-import base64
-import os
-
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from pymongo import MongoClient
 
 from _gcp_secrets import load_secrets
-
-DB_NAME = "emergency_exit"
-
-
-def _connect():
-    mongo_uri = os.environ.get("MONGO_URI")
-    if not mongo_uri:
-        raise SystemExit("ERROR: MONGO_URI environment variable not set.")
-    return MongoClient(mongo_uri)[DB_NAME]
-
-
-def _cipher():
-    key = os.environ.get("VAULT_ENCRYPTION_KEY", "")
-    if not key:
-        raise SystemExit("ERROR: VAULT_ENCRYPTION_KEY environment variable not set.")
-    return AESGCM(bytes.fromhex(key))
-
-
-def _encrypt_string(cipher: AESGCM, plaintext: str) -> str:
-    nonce = os.urandom(12)
-    ciphertext = cipher.encrypt(nonce, plaintext.encode("utf-8"), None)
-    return base64.b64encode(nonce + ciphertext).decode("ascii")
+from _mongo import connect, encrypt_string, get_cipher
 
 
 def main():
@@ -60,8 +34,8 @@ def main():
 
     load_secrets(args.gcp_project_id, names=("MONGO_URI", "VAULT_ENCRYPTION_KEY"))
 
-    db = _connect()
-    cipher = _cipher()
+    db = connect()
+    cipher = get_cipher()
     files = db["fs.files"]
 
     migrated = 0
@@ -79,7 +53,7 @@ def main():
             {"_id": fid},
             {
                 "$set": {
-                    "filename": _encrypt_string(cipher, plain_name),
+                    "filename": encrypt_string(cipher, plain_name),
                     "metadata.filenameEncrypted": True,
                 },
                 "$unset": {"metadata.filename": ""},

@@ -21,45 +21,9 @@ Run from identity-service/:
 """
 
 import argparse
-import base64
-import json
-import os
-
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from pymongo import MongoClient
 
 from _gcp_secrets import load_secrets
-
-DB_NAME = "emergency_exit"
-
-
-def _connect():
-    mongo_uri = os.environ.get("MONGO_URI")
-    if not mongo_uri:
-        raise SystemExit("ERROR: MONGO_URI environment variable not set.")
-    return MongoClient(mongo_uri)[DB_NAME]
-
-
-def _cipher():
-    key = os.environ.get("VAULT_ENCRYPTION_KEY", "")
-    if not key:
-        raise SystemExit("ERROR: VAULT_ENCRYPTION_KEY environment variable not set.")
-    return AESGCM(bytes.fromhex(key))
-
-
-def _encrypt_content(cipher: AESGCM, content_dict: dict) -> str:
-    plaintext = json.dumps(content_dict, separators=(",", ":")).encode("utf-8")
-    nonce = os.urandom(12)
-    return base64.b64encode(nonce + cipher.encrypt(nonce, plaintext, None)).decode("ascii")
-
-
-def _decrypt_content(cipher: AESGCM, stored) -> dict:
-    if stored is None:
-        return {}
-    if isinstance(stored, dict):
-        return stored
-    raw = base64.b64decode(stored)
-    return json.loads(cipher.decrypt(raw[:12], raw[12:], None).decode("utf-8"))
+from _mongo import connect, decrypt_content, encrypt_content, get_cipher
 
 
 def main():
@@ -70,8 +34,8 @@ def main():
 
     load_secrets(args.gcp_project_id, names=("MONGO_URI", "VAULT_ENCRYPTION_KEY"))
 
-    db = _connect()
-    cipher = _cipher()
+    db = connect()
+    cipher = get_cipher()
     vaults = db["vaults"]
 
     migrated = 0
@@ -80,7 +44,7 @@ def main():
         oid = doc["_id"]
         log = doc.get("log") or []
         try:
-            content = _decrypt_content(cipher, doc.get("content"))
+            content = decrypt_content(cipher, doc.get("content"))
         except Exception as exc:
             print(f"  WARNING: vault {oid} failed to decrypt — skipping ({exc})")
             skipped += 1
@@ -98,7 +62,7 @@ def main():
 
         vaults.update_one(
             {"_id": oid},
-            {"$set": {"content": _encrypt_content(cipher, new_content)},
+            {"$set": {"content": encrypt_content(cipher, new_content)},
              "$unset": {"log": ""}},
         )
         migrated += 1

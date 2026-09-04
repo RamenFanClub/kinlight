@@ -21,36 +21,11 @@ Run from identity-service/:
 """
 
 import argparse
-import base64
-import os
-
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from pymongo import MongoClient
 
 from _gcp_secrets import load_secrets
+from _mongo import connect, encrypt_string, get_cipher
 
-DB_NAME = "emergency_exit"
 PII_FIELDS = ("name", "ageGroup", "notes")
-
-
-def _connect():
-    mongo_uri = os.environ.get("MONGO_URI")
-    if not mongo_uri:
-        raise SystemExit("ERROR: MONGO_URI environment variable not set.")
-    return MongoClient(mongo_uri)[DB_NAME]
-
-
-def _cipher():
-    key = os.environ.get("VAULT_ENCRYPTION_KEY", "")
-    if not key:
-        raise SystemExit("ERROR: VAULT_ENCRYPTION_KEY environment variable not set.")
-    return AESGCM(bytes.fromhex(key))
-
-
-def _encrypt_string(cipher: AESGCM, plaintext: str) -> str:
-    nonce = os.urandom(12)
-    ciphertext = cipher.encrypt(nonce, plaintext.encode("utf-8"), None)
-    return base64.b64encode(nonce + ciphertext).decode("ascii")
 
 
 def main():
@@ -61,8 +36,8 @@ def main():
 
     load_secrets(args.gcp_project_id, names=("MONGO_URI", "VAULT_ENCRYPTION_KEY"))
 
-    db = _connect()
-    cipher = _cipher()
+    db = connect()
+    cipher = get_cipher()
     users = db["users"]
 
     migrated = 0
@@ -74,7 +49,7 @@ def main():
         for field in PII_FIELDS:
             value = doc.get(field)
             if isinstance(value, str) and value:
-                set_doc[field] = _encrypt_string(cipher, value)
+                set_doc[field] = encrypt_string(cipher, value)
         set_doc["piiEncrypted"] = True
 
         if args.dry_run:

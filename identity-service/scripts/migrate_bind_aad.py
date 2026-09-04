@@ -27,68 +27,11 @@ Run from identity-service/:
 """
 
 import argparse
-import base64
-import json
-import os
 
-from bson import ObjectId
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.exceptions import InvalidTag
 from gridfs import GridFS
-from pymongo import MongoClient
 
 from _gcp_secrets import load_secrets
-
-DB_NAME = "emergency_exit"
-
-
-def _connect():
-    mongo_uri = os.environ.get("MONGO_URI")
-    if not mongo_uri:
-        raise SystemExit("ERROR: MONGO_URI environment variable not set.")
-    return MongoClient(mongo_uri)[DB_NAME]
-
-
-def _cipher():
-    key = os.environ.get("VAULT_ENCRYPTION_KEY", "")
-    if not key:
-        raise SystemExit("ERROR: VAULT_ENCRYPTION_KEY environment variable not set.")
-    return AESGCM(bytes.fromhex(key))
-
-
-def _encrypt_content(cipher: AESGCM, content_dict: dict, user_id: str) -> str:
-    plaintext = json.dumps(content_dict, separators=(",", ":")).encode("utf-8")
-    nonce = os.urandom(12)
-    aad = user_id.encode("utf-8")
-    return base64.b64encode(nonce + cipher.encrypt(nonce, plaintext, aad)).decode("ascii")
-
-
-def _decrypt_content(cipher: AESGCM, stored, user_id: str):
-    """Decrypt content — tries AAD=user_id, falls back to legacy None AAD."""
-    if stored is None:
-        return {}
-    if isinstance(stored, dict):
-        return stored
-    raw = base64.b64decode(stored)
-    nonce, ciphertext = raw[:12], raw[12:]
-    try:
-        plaintext = cipher.decrypt(nonce, ciphertext, user_id.encode("utf-8"))
-    except InvalidTag:
-        plaintext = cipher.decrypt(nonce, ciphertext, None)
-    return json.loads(plaintext.decode("utf-8"))
-
-
-def _encrypt_bytes(cipher: AESGCM, plaintext: bytes, user_id: str) -> bytes:
-    nonce = os.urandom(12)
-    return nonce + cipher.encrypt(nonce, plaintext, user_id.encode("utf-8"))
-
-
-def _decrypt_bytes(cipher: AESGCM, encrypted: bytes, user_id: str) -> bytes:
-    nonce, ciphertext = encrypted[:12], encrypted[12:]
-    try:
-        return cipher.decrypt(nonce, ciphertext, user_id.encode("utf-8"))
-    except InvalidTag:
-        return cipher.decrypt(nonce, ciphertext, None)
+from _mongo import connect, decrypt_bytes, decrypt_content, encrypt_bytes, encrypt_content, get_cipher
 
 
 def main():
@@ -100,8 +43,8 @@ def main():
 
     load_secrets(args.gcp_project_id, names=("MONGO_URI", "VAULT_ENCRYPTION_KEY"))
 
-    db = _connect()
-    cipher = _cipher()
+    db = connect()
+    cipher = get_cipher()
 
     # ── vault content ─────────────────────────────────────────────────────────
     vaults_migrated = 0
@@ -113,7 +56,7 @@ def main():
             vaults_skipped += 1
             continue
         try:
-            content = _decrypt_content(cipher, stored, str(uid))
+            content = decrypt_content(cipher, stored, str(uid))
         except Exception as e:
             print(f"  WARNING: vault {uid} failed to decrypt — skipping ({e})")
             vaults_skipped += 1
@@ -127,7 +70,7 @@ def main():
             continue
         db["vaults"].update_one(
             {"_id": doc["_id"]},
-            {"$set": {"content": _encrypt_content(cipher, content, str(uid))}},
+            {"$set": {"content": encrypt_content(cipher, content, str(uid))}},
         )
         vaults_migrated += 1
 
@@ -152,7 +95,7 @@ def main():
                 files_failed += 1
                 continue
             try:
-                plaintext = _decrypt_bytes(cipher, encrypted_data, str(owner))
+                plaintext = decrypt_bytes(cipher, encrypted_data, str(owner))
             except Exception as e:
                 print(f"  WARNING: file {fid} failed to decrypt — skipping ({e})")
                 files_failed += 1
@@ -161,7 +104,7 @@ def main():
                 print(f"  [dry-run] file {fid}: would re-encrypt bytes with AAD")
                 files_migrated += 1
                 continue
-            new_data = _encrypt_bytes(cipher, plaintext, str(owner))
+            new_data = encrypt_bytes(cipher, plaintext, str(owner))
             metadata = fdoc.get("metadata", {}) or {}
             fs.delete(fid)
             fs.put(
