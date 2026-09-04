@@ -324,11 +324,29 @@ def slice_infra(db):
         info = db.command("connectionStatus")
         auth = info.get("authInfo", {}) or {}
         user = (auth.get("authenticatedUsers") or [{}])[0].get("user")
-        roles = [r.get("role") for r in (auth.get("authenticatedUserRoles") or [])]
-        db_roles = [r.get("db") for r in (auth.get("authenticatedUserRoles") or [])]
-        print(f"    authenticated as '{user}' roles={list(zip(roles, db_roles))}")
-        ok_roles = all(r == "readWrite" and d == DB_NAME for r, d in zip(roles, db_roles))
-        check("S5", ok_roles, f"current user restricted to readWrite@{DB_NAME} (F135)")
+        roles = list(zip(
+            [r.get("role") for r in (auth.get("authenticatedUserRoles") or [])],
+            [r.get("db") for r in (auth.get("authenticatedUserRoles") or [])],
+        ))
+        print(f"    authenticated as '{user}' roles={roles}")
+
+        privs = auth.get("authenticatedUserPrivileges") or []
+        bad_dbs = set()
+        for p in privs:
+            res = p.get("resource") or {}
+            db_name = res.get("db")
+            actions = (p.get("actions") or [])
+            coll = res.get("collection", "")
+            print(f"      privilege: db={db_name!r} collection={coll!r} actions={actions}")
+            if db_name != DB_NAME:
+                bad_dbs.add(db_name)
+
+        if not privs:
+            check("S5", False, "no authenticatedUserPrivileges returned — cannot verify scope")
+        elif bad_dbs:
+            check("S5", False, f"privileges scope beyond {DB_NAME} (F135): {sorted(bad_dbs)}")
+        else:
+            check("S5", True, f"all privileges scoped to {DB_NAME} (F135) — least-privilege confirmed")
     except Exception as e:
         warn("S5", f"could not read connectionStatus: {e}")
     warn("S5", "confirm IP allowlist in Atlas console = 35.212.156.52/32 (+ personal IP), no 0.0.0.0/0 (F136)")
