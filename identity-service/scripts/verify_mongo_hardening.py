@@ -23,7 +23,7 @@ On the GCE VM, pass --gcp-project-id to have the script fetch its own secrets
 from Secret Manager via the instance metadata server (mirrors main.py F122), so
 no secret ever appears in argv, env files, or shell history:
 
-    docker run --rm -e GCP_PROJECT_ID=<project-id> -v ~/kinlight/identity-service:/app \
+    docker run --rm -v ~/kinlight/identity-service:/app \
         kinlight-api python /app/scripts/verify_mongo_hardening.py --gcp-project-id <project-id>
 
 Exit code is non-zero if any check fails.
@@ -36,8 +36,9 @@ import os
 import re
 import sys
 
-import requests
 from pymongo import MongoClient
+
+from _gcp_secrets import load_secrets
 
 DB_NAME = "emergency_exit"
 
@@ -50,72 +51,27 @@ SHOULD_BE_ENCRYPTED_USER = ("name", "ageGroup", "notes")
 SHOULD_BE_ENCRYPTED_DEVICE = ("deviceName", "userAgent", "ip")
 SHOULD_BE_ENCRYPTED_CRED = ("deviceName",)
 
-# Collections that are expected to exist after all shipped features.
-EXPECTED_COLLECTIONS = (
+# Collections that must exist (core storage / always written by a live user).
+REQUIRED_COLLECTIONS = (
     "users",
     "vaults",
     "fs.files",
     "fs.chunks",
-    "trusted_links",
     "push_subscriptions",
     "known_devices",
     "webauthn_credentials",
-    "password_resets",
     "system",
+)
+
+# Collections created lazily (only exist once a link/reset is issued) — absent
+# or empty is expected, so they WARN rather than FAIL.
+OPTIONAL_COLLECTIONS = (
+    "trusted_links",
+    "password_resets",
 )
 
 FAILURES = []  # (slice, message)
 WARNINGS = []  # (slice, message)
-
-# ── GCP Secret Manager self-fetch (mirrors main.py F122) ──────────────────────
-# When --gcp-project-id is supplied, the script pulls its own secrets from Secret
-# Manager using the VM's attached service account (via the instance metadata
-# server), so secrets never appear in argv, env files, or shell history.
-
-_METADATA_TOKEN_URL = (
-    "http://metadata.google.internal/computeMetadata/v1/"
-    "instance/service-accounts/default/token"
-)
-_METADATA_HEADERS = {"Metadata-Flavor": "Google"}
-
-_SECRET_MAP = (
-    ("MONGO_URI", "kinlight-mongo-uri"),
-    ("VAULT_ENCRYPTION_KEY", "kinlight-vault-encryption-key"),
-    ("JWT_SECRET", "kinlight-jwt-secret"),
-)
-
-
-def _fetch_secret_manager_token() -> str:
-    resp = requests.get(_METADATA_TOKEN_URL, headers=_METADATA_HEADERS, timeout=3)
-    resp.raise_for_status()
-    return resp.json()["access_token"]
-
-
-def _fetch_secret(project_id: str, token: str, secret_name: str) -> str:
-    url = (
-        "https://secretmanager.googleapis.com/v1/projects/"
-        f"{project_id}/secrets/{secret_name}/versions/latest:access"
-    )
-    resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=5)
-    resp.raise_for_status()
-    data = resp.json()
-    return base64.b64decode(data["payload"]["data"]).decode("utf-8")
-
-
-def _load_secrets_from_secret_manager(project_id: str) -> None:
-    """Populate os.environ for MONGO_URI / VAULT_ENCRYPTION_KEY / JWT_SECRET from
-    Secret Manager, unless the env var is already set (env vars always win)."""
-    if not project_id:
-        return
-    token = _fetch_secret_manager_token()
-    for env_name, secret_name in _SECRET_MAP:
-        if os.environ.get(env_name):
-            continue
-        try:
-            os.environ[env_name] = _fetch_secret(project_id, token, secret_name)
-            print(f"    loaded {env_name} from Secret Manager ({secret_name})")
-        except Exception as exc:
-            print(f"    [WARN] failed to load {env_name} ({secret_name}): {exc}")
 
 
 def check(slice_name, ok, msg):
@@ -194,12 +150,15 @@ def slice_scope(db):
     print("S0 — Scope & read-access baseline")
     present = set(db.list_collection_names())
     check("S0", bool(present), f"connected as a Mongo-only attacker; {len(present)} collections visible")
-    for c in EXPECTED_COLLECTIONS:
+    for c in REQUIRED_COLLECTIONS + OPTIONAL_COLLECTIONS:
         count = db[c].count_documents({}) if c in present else 0
-        marker = "" if c in present else " (MISSING)"
+        marker = "" if c in present else " (absent)"
         print(f"    {c}: {count}{marker}")
-    for c in EXPECTED_COLLECTIONS:
-        check("S0", c in present, f"expected collection '{c}' present")
+    for c in REQUIRED_COLLECTIONS:
+        check("S0", c in present, f"required collection '{c}' present")
+    for c in OPTIONAL_COLLECTIONS:
+        if c not in present:
+            warn("S0", f"optional collection '{c}' absent (lazy — created on first use)")
     return present
 
 
@@ -212,7 +171,10 @@ def slice_vaults(db, present):
     bad_log = 0
     bad_legacy = 0
     pii_in_content = 0
+    per_user = {}
     for doc in db["vaults"].find({}):
+        uid = str(doc.get("userId")) if doc.get("userId") else "(no userId)"
+        per_user[uid] = per_user.get(uid, 0) + 1
         content = doc.get("content")
         if isinstance(content, dict):
             bad_content += 1
@@ -230,6 +192,8 @@ def slice_vaults(db, present):
             bad_log += 1
         if "vault" in doc:
             bad_legacy += 1
+    for uid, n in sorted(per_user.items()):
+        print(f"    vault userId={uid}: {n} doc(s)")
     check("S1", bad_content == 0, f"content is opaque ciphertext in all docs ({bad_content} plaintext)")
     check("S1", bad_log == 0, f"no top-level plaintext 'log' field (F131) ({bad_log} found)")
     check("S1", bad_legacy == 0, f"no legacy plaintext 'vault' blob (F41) ({bad_legacy} found)")
@@ -404,7 +368,7 @@ def main():
     args = parser.parse_args()
 
     if args.gcp_project_id:
-        _load_secrets_from_secret_manager(args.gcp_project_id)
+        load_secrets(args.gcp_project_id)
 
     key = args.key or os.environ.get("VAULT_ENCRYPTION_KEY", "")
     jwt_secret = args.jwt_secret or os.environ.get("JWT_SECRET", "")
@@ -417,7 +381,7 @@ def main():
         "S2": lambda: slice_users(db, db.list_collection_names()),
         "S3": lambda: slice_gridfs(db, db.list_collection_names()),
         "S4": lambda: slice_secondary(db, db.list_collection_names()),
-        "S5": slice_infra,
+        "S5": lambda: slice_infra(db),
         "S6": lambda: slice_auth(db, db.list_collection_names(), key, jwt_secret),
     }
     if args.collections:

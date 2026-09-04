@@ -28,6 +28,8 @@ import os
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from pymongo import MongoClient
 
+from _gcp_secrets import load_secrets
+
 DB_NAME = "emergency_exit"
 
 
@@ -63,7 +65,10 @@ def _decrypt_content(cipher: AESGCM, stored) -> dict:
 def main():
     parser = argparse.ArgumentParser(description="F131: migrate plaintext log into encrypted content")
     parser.add_argument("--dry-run", action="store_true", help="Report without writing")
+    parser.add_argument("--gcp-project-id", help="GCP project ID — self-fetch secrets from Secret Manager")
     args = parser.parse_args()
+
+    load_secrets(args.gcp_project_id, names=("MONGO_URI", "VAULT_ENCRYPTION_KEY"))
 
     db = _connect()
     cipher = _cipher()

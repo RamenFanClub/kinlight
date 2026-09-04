@@ -10,7 +10,8 @@ This script force-migrates existing data now instead of waiting for each
 record's next save:
 
   Vaults:      decrypt legacy `content` (None AAD) and re-encrypt with
-               AAD = str(vault.userId).
+               AAD = str(vault.userId). Also encrypts plaintext dict `content`
+               (pre-F04 records) with AAD in the same pass.
   GridFS files: decrypt legacy bytes (None AAD) and re-encrypt with
                AAD = str(metadata.userId).
 
@@ -35,6 +36,8 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.exceptions import InvalidTag
 from gridfs import GridFS
 from pymongo import MongoClient
+
+from _gcp_secrets import load_secrets
 
 DB_NAME = "emergency_exit"
 
@@ -92,7 +95,10 @@ def main():
     parser = argparse.ArgumentParser(description="F134: bind encrypted blobs to their owner via AAD")
     parser.add_argument("--dry-run", action="store_true", help="Report without writing")
     parser.add_argument("--skip-files", action="store_true", help="Only migrate vault content, skip GridFS files")
+    parser.add_argument("--gcp-project-id", help="GCP project ID — self-fetch secrets from Secret Manager")
     args = parser.parse_args()
+
+    load_secrets(args.gcp_project_id, names=("MONGO_URI", "VAULT_ENCRYPTION_KEY"))
 
     db = _connect()
     cipher = _cipher()
@@ -103,7 +109,7 @@ def main():
     for doc in db["vaults"].find({}):
         uid = doc.get("userId")
         stored = doc.get("content")
-        if not uid or not isinstance(stored, str):
+        if not uid or stored is None:
             vaults_skipped += 1
             continue
         try:

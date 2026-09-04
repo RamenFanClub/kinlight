@@ -27,6 +27,8 @@ import os
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from pymongo import MongoClient
 
+from _gcp_secrets import load_secrets
+
 DB_NAME = "emergency_exit"
 PII_FIELDS = ("name", "ageGroup", "notes")
 
@@ -54,7 +56,10 @@ def _encrypt_string(cipher: AESGCM, plaintext: str) -> str:
 def main():
     parser = argparse.ArgumentParser(description="F133: encrypt plaintext user PII fields at rest")
     parser.add_argument("--dry-run", action="store_true", help="Report without writing")
+    parser.add_argument("--gcp-project-id", help="GCP project ID — self-fetch secrets from Secret Manager")
     args = parser.parse_args()
+
+    load_secrets(args.gcp_project_id, names=("MONGO_URI", "VAULT_ENCRYPTION_KEY"))
 
     db = _connect()
     cipher = _cipher()
