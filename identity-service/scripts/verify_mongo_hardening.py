@@ -367,8 +367,7 @@ def main():
     parser.add_argument("--collections", help="comma-separated subset of slices to run (S0..S6)")
     args = parser.parse_args()
 
-    if args.gcp_project_id:
-        load_secrets(args.gcp_project_id)
+    load_secrets(args.gcp_project_id)
 
     key = args.key or os.environ.get("VAULT_ENCRYPTION_KEY", "")
     jwt_secret = args.jwt_secret or os.environ.get("JWT_SECRET", "")
