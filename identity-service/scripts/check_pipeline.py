@@ -106,19 +106,29 @@ def main():
     user = db["users"].find_one({"email": target})
     if not user:
         raise SystemExit(f"ERROR: target {target} not found in users collection.")
-    vault = db["vaults"].find_one({"userId": _uid_filter(user["_id"])})
-    if not vault:
+    vaults = list(db["vaults"].find({"userId": _uid_filter(user["_id"])}))
+    if not vaults:
         raise SystemExit(f"ERROR: no vault found for target {target}.")
 
-    notified = bool(vault.get("overdueNotificationSent", False))
     heartbeat = db["system"].find_one({"_id": "pulse_scanner"}) or {}
+    print(f"      vaults for this user = {len(vaults)}")
 
-    content = decrypt_content(cipher, vault.get("content"), str(user["_id"])) if cipher else {}
-    contacts = content.get("kin", []) if isinstance(content, dict) else []
+    notified = False
+    contacts = []
+    proto = ""
+    for vault in vaults:
+        content = decrypt_content(cipher, vault.get("content"), str(user["_id"])) if cipher else {}
+        these_contacts = content.get("kin", []) if isinstance(content, dict) else []
+        this_notified = bool(vault.get("overdueNotificationSent", False))
+        notified = notified or this_notified
+        proto = vault.get("notifyProto", proto) or proto
+        contacts = these_contacts or contacts
+        print(f"      vault {vault.get('_id')}: overdueNotificationSent={this_notified} "
+              f"notifyProto={vault.get('notifyProto')} contacts={len(these_contacts)}")
 
-    print(f"      overdueNotificationSent = {notified}")
+    print(f"      (any vault notified) = {notified}")
     print(f"      pulse heartbeat lastRun = {heartbeat.get('lastRun')} (checked {heartbeat.get('vaultsChecked')} vaults)")
-    print(f"      notifyProto = {vault.get('notifyProto')}")
+    print(f"      notifyProto = {proto}")
     print(f"      contacts    = {len(contacts)}")
     for c in contacts:
         print(f"        - {c.get('first')} {c.get('last')} <{c.get('email')}>")
@@ -127,7 +137,7 @@ def main():
     print("5/5  Verdict")
     print("=" * 70)
     if notified:
-        print("PASS — the scan marked the vault as notified (emails were attempted).")
+        print("PASS — the scan marked a vault as notified (emails were attempted).")
     else:
         print("WARN — overdueNotificationSent is still False (no contacts? escalate protocol? check logs).")
 
