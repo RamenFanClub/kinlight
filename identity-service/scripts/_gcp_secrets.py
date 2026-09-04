@@ -18,6 +18,9 @@ _METADATA_TOKEN_URL = (
     "http://metadata.google.internal/computeMetadata/v1/"
     "instance/service-accounts/default/token"
 )
+_METADATA_PROJECT_ID_URL = (
+    "http://metadata.google.internal/computeMetadata/v1/project/project-id"
+)
 _METADATA_HEADERS = {"Metadata-Flavor": "Google"}
 
 _SECRET_MAP = (
@@ -33,6 +36,17 @@ def _fetch_token() -> str:
     return resp.json()["access_token"]
 
 
+def _discover_project_id() -> str:
+    """Return the GCP project ID from the instance metadata server, or "" if
+    we're not running on GCE (or the metadata server is unreachable)."""
+    try:
+        resp = requests.get(_METADATA_PROJECT_ID_URL, headers=_METADATA_HEADERS, timeout=2)
+        resp.raise_for_status()
+        return resp.text.strip()
+    except Exception:
+        return ""
+
+
 def _fetch_secret(project_id: str, token: str, secret_name: str) -> str:
     url = (
         "https://secretmanager.googleapis.com/v1/projects/"
@@ -43,11 +57,16 @@ def _fetch_secret(project_id: str, token: str, secret_name: str) -> str:
     return base64.b64decode(resp.json()["payload"]["data"]).decode("utf-8")
 
 
-def load_secrets(project_id: str, names=("MONGO_URI", "VAULT_ENCRYPTION_KEY", "JWT_SECRET")) -> None:
+def load_secrets(project_id: str = None, names=("MONGO_URI", "VAULT_ENCRYPTION_KEY", "JWT_SECRET")) -> None:
     """Populate os.environ for the mapped secrets, unless already set (env wins).
 
-    `names` restricts which secrets to fetch. No-op when project_id is empty.
+    `names` restricts which secrets to fetch. When `project_id` is empty, it is
+    auto-discovered from the instance metadata server (so the caller never has to
+    put the project ID on the command line). No-op if discovery fails (e.g. local
+    runs fall back to env vars).
     """
+    if not project_id:
+        project_id = _discover_project_id()
     if not project_id:
         return
     token = _fetch_token()
