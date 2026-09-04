@@ -74,24 +74,32 @@ def _orphaned_ids(db):
     return valid_str, sorted(orphaned)
 
 
+def _uid_filter(sid):
+    """Match a userId regardless of whether it's stored as a string or ObjectId."""
+    try:
+        return {"$in": [sid, ObjectId(sid)]}
+    except Exception:
+        return sid
+
+
 def _related_counts(db, sid):
-    oid = ObjectId(sid)
+    filt = _uid_filter(sid)
     return {
-        "vault": db["vaults"].count_documents({"userId": oid}),
-        "push_subs": db["push_subscriptions"].count_documents({"userId": oid}),
-        "trusted_links": db["trusted_links"].count_documents({"userId": oid}),
-        "known_devices": db["known_devices"].count_documents({"userId": oid}),
-        "passkeys": db["webauthn_credentials"].count_documents({"userId": oid}),
-        "resets": db["password_resets"].count_documents({"userId": oid}),
-        "files": db["fs.files"].count_documents({"metadata.userId": sid}),
+        "vault": db["vaults"].count_documents({"userId": filt}),
+        "push_subs": db["push_subscriptions"].count_documents({"userId": filt}),
+        "trusted_links": db["trusted_links"].count_documents({"userId": filt}),
+        "known_devices": db["known_devices"].count_documents({"userId": filt}),
+        "passkeys": db["webauthn_credentials"].count_documents({"userId": filt}),
+        "resets": db["password_resets"].count_documents({"userId": filt}),
+        "files": db["fs.files"].count_documents({"metadata.userId": filt}),
     }
 
 
 def _delete_orphan(db, sid):
-    oid = ObjectId(sid)
+    filt = _uid_filter(sid)
 
     files_deleted = 0
-    for fdoc in db["fs.files"].find({"metadata.userId": sid}):
+    for fdoc in db["fs.files"].find({"metadata.userId": filt}):
         try:
             GridFS(db).delete(fdoc["_id"])
             files_deleted += 1
@@ -99,12 +107,12 @@ def _delete_orphan(db, sid):
             pass
 
     return {
-        "vault": db["vaults"].delete_many({"userId": oid}).deleted_count,
-        "push_subs": db["push_subscriptions"].delete_many({"userId": oid}).deleted_count,
-        "trusted_links": db["trusted_links"].delete_many({"userId": oid}).deleted_count,
-        "known_devices": db["known_devices"].delete_many({"userId": oid}).deleted_count,
-        "passkeys": db["webauthn_credentials"].delete_many({"userId": oid}).deleted_count,
-        "resets": db["password_resets"].delete_many({"userId": oid}).deleted_count,
+        "vault": db["vaults"].delete_many({"userId": filt}).deleted_count,
+        "push_subs": db["push_subscriptions"].delete_many({"userId": filt}).deleted_count,
+        "trusted_links": db["trusted_links"].delete_many({"userId": filt}).deleted_count,
+        "known_devices": db["known_devices"].delete_many({"userId": filt}).deleted_count,
+        "passkeys": db["webauthn_credentials"].delete_many({"userId": filt}).deleted_count,
+        "resets": db["password_resets"].delete_many({"userId": filt}).deleted_count,
         "files": files_deleted,
     }
 
