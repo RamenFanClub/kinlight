@@ -642,7 +642,7 @@ curl -s https://api.kinlight.app/health | python3 -m json.tool
 # expect: {"ok": true, "pulseScanner": {..., "healthy": true}}
 ```
 
-Simulate a dead scanner with `POST /admin/force-stale-pulse` (from the Swagger UI at `https://api.kinlight.app/docs`, or the `validate_notification_pipeline.py` login flow), then:
+Simulate a dead scanner with `POST /admin/force-stale-pulse` (from the Swagger UI at `https://api.kinlight.app/docs`, or the `check_pipeline.py` login flow), then:
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" https://api.kinlight.app/health

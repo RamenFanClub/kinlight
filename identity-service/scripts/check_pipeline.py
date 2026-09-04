@@ -13,11 +13,13 @@ you will send a false alarm.
 
 Run from identity-service/:
     source .venv/bin/activate
-    KINLIGHT_ADMIN_EMAIL=... KINLIGHT_ADMIN_PASSWORD=... \
-        python3 scripts/validate_notification_pipeline.py --target <holder-email>
+    KINLIGHT_ADMIN_EMAIL=... KINLIGHT_ADMIN_PASSWORD=... TARGET=<holder-email> \
+        python3 scripts/check_pipeline.py
 
 On the GCE VM the secrets self-fetch from Secret Manager (project ID
 auto-discovered), including `kinlight-admin-email` / `kinlight-admin-password`.
+The holder defaults to the admin's own account; set the `TARGET` env var (or
+`--target`) to make a specific account overdue.
 """
 
 import argparse
@@ -64,7 +66,7 @@ def main():
 
     admin_email = args.admin_email or os.environ.get("KINLIGHT_ADMIN_EMAIL", "")
     admin_password = args.admin_password or os.environ.get("KINLIGHT_ADMIN_PASSWORD", "")
-    target = (args.target or "").strip().lower() or admin_email
+    target = (args.target or os.environ.get("TARGET", "") or "").strip().lower() or admin_email
 
     if not admin_email or not admin_password:
         raise SystemExit("ERROR: admin credentials missing — set kinlight-admin-email / kinlight-admin-password "
