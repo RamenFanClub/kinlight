@@ -29,6 +29,7 @@ _SECRET_MAP = (
     ("JWT_SECRET", "kinlight-jwt-secret"),
     ("KINLIGHT_ADMIN_EMAIL", "kinlight-admin-email"),
     ("KINLIGHT_ADMIN_PASSWORD", "kinlight-admin-password"),
+    ("KINLIGHT_UPTIMEROBOT_API_KEY", "kinlight-uptimerobot-api-key"),
 )
 
 

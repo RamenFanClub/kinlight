@@ -617,39 +617,41 @@ Also remove any Railway env vars from 🌐 GitHub Secrets if you stored them the
 
 The dead man's switch only fires if the VM is alive **and** the hourly pulse scanner is running. `GET /health` already covers both: it returns **HTTP 503** when the scanner hasn't run in `PULSE_SCAN_UNHEALTHY_AFTER_HOURS` (2 hours) or has never run, and a plain `200` when healthy. Point an external monitor at it so a silent failure pages you — this is the difference between "the app is down" and "the app is up but would never notify anyone".
 
-### Setup (UptimeRobot free tier)
+### Setup (UptimeRobot free tier, scripted)
 
-🌐 **UptimeRobot** → New Monitor:
+The monitor is created idempotently via the UptimeRobot v2 API — no UI click-through. You only need a **read-write API key** from *Integrations & API → API*, stored in Secret Manager as `kinlight-uptimerobot-api-key` (env `KINLIGHT_UPTIMEROBOT_API_KEY`).
+
+☁️ **On the VM** (secrets self-fetch from Secret Manager):
+
+```bash
+cd /app  # or identity-service/ locally
+python scripts/create_uptimerobot_monitor.py
+```
+
+The script creates (or detects) a monitor with these settings:
 
 | Field | Value |
 |-------|-------|
-| Monitor Type | HTTP(s) |
+| Monitor Type | HTTP(s) (`type=1`) |
 | Friendly Name | `kinlight-api` |
 | URL / IP | `https://api.kinlight.app/health` |
-| Monitoring Interval | 5 minutes |
-| Alert Contacts To Notify | your email (also enable a phone push / app notification if you use them) |
+| Monitoring Interval | 300s (5 minutes — free-plan minimum) |
+| Alert Contact | account default email (auto-selected) |
 
 UptimeRobot treats any non-`2xx` response as DOWN, so the F93 503 triggers an alert with **zero extra configuration** — the monitor alone covers: VM down, Docker crashed, nginx down, and "scanner silently stopped".
 
 ### Verify the monitor actually alerts
 
-Backdate the scanner heartbeat (via an admin token) so `/health` flips to 503, confirm UptimeRobot pages you on its next poll, then restore.
-
-☁️ **On the VM** (or any admin session), first confirm the healthy baseline:
+Run the verify script — it backdates the scanner heartbeat so `/health` flips to 503, holds it open long enough for a 5-min poll to land, then restores it:
 
 ```bash
-curl -s https://api.kinlight.app/health | python3 -m json.tool
-# expect: {"ok": true, "pulseScanner": {..., "healthy": true}}
+python scripts/verify_health_alert.py            # 6-minute hold by default
+python scripts/verify_health_alert.py --hold-seconds 360
 ```
 
-Simulate a dead scanner with `POST /admin/force-stale-pulse` (from the Swagger UI at `https://api.kinlight.app/docs`, or the `check_pipeline.py` login flow), then:
+Watch your inbox for the DOWN email during the hold. The script restores the heartbeat automatically before exiting (via `POST /admin/trigger-pulse`). Do this once to prove the alert chain, then leave the monitor in place permanently.
 
-```bash
-curl -s -o /dev/null -w "%{http_code}\n" https://api.kinlight.app/health
-# expect 503 now — UptimeRobot will alert within 5 minutes
-```
-
-Restore by triggering a real scan (`POST /admin/trigger-pulse`) or just waiting for the next hourly run; `/health` returns to `200`. Do this once to prove the alert chain, then leave the monitor in place permanently.
+Manual equivalent (from the Swagger UI at `https://api.kinlight.app/docs`): `POST /admin/force-stale-pulse` flips `/health` to 503; `POST /admin/trigger-pulse` restores it.
 
 ---
 
