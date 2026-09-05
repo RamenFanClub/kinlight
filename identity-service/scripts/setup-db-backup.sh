@@ -68,6 +68,7 @@ cat >> "$RCLONE_CONF" <<'EOF'
 [gcs]
 type = google cloud storage
 env_auth = true
+bucket_policy_only = true
 location = us-west1
 EOF
 
@@ -87,26 +88,52 @@ fi
 say "GCS bucket gs://${BUCKET} is reachable."
 
 # ── 4. Configure rclone crypt: remote (generate passphrase if new) ────────────
-NEW_PASS=0
 if ! remote_exists 'crypt:'; then
     say "Creating rclone remote crypt: (client-side encryption) ..."
     gen_secret() { head -c 24 /dev/urandom | base64 | tr -d '\n'; }
     CRYPT_PASS="$(gen_secret)"
     CRYPT_SALT="$(gen_secret)"
-    PASS_OBSC="$(rclone obscure "$CRYPT_PASS")"
-    SALT_OBSC="$(rclone obscure "$CRYPT_SALT")"
     rclone config create crypt crypt \
         remote="gcs:${BUCKET}" \
         filename_encryption=standard \
         directory_name_encryption=true \
-        password="$PASS_OBSC" \
-        password2="$SALT_OBSC"
-    NEW_PASS=1
+        password="$(rclone obscure "$CRYPT_PASS")" \
+        password2="$(rclone obscure "$CRYPT_SALT")"
 else
     say "rclone remote crypt: already exists (passphrase NOT regenerated)."
 fi
 rclone lsd crypt: >/dev/null || die "crypt: remote is broken — re-check rclone config."
 chmod 600 "$RCLONE_CONF"
+
+# ── 4b. Save + print the crypt passphrase (must never be lost) ────────────────
+# If crypt pre-existed, recover the passphrase from rclone.conf so it can still
+# be (re)saved + printed. Done BEFORE the test backup so a later failure can't
+# leave you without the passphrase.
+if [[ -z "${CRYPT_PASS:-}" ]]; then
+    CRYPT_PASS="$(rclone reveal "$(rclone config dump | jq -r '.crypt.password')")"
+    CRYPT_SALT="$(rclone reveal "$(rclone config dump | jq -r '.crypt.password2')")"
+fi
+mkdir -p "$HOME/.config/kinlight"
+( umask 077; printf 'Kinlight DB backup crypt passphrase (F110)\npassword : %s\nsalt     : %s\n' \
+    "$CRYPT_PASS" "$CRYPT_SALT" > "$CRYPT_SECRET_FILE" )
+cat <<EOF
+
+====================================================================
+ SAVE THIS NOW — DB BACKUP ENCRYPTION PASSPHRASE
+====================================================================
+ password : $CRYPT_PASS
+ salt     : $CRYPT_SALT
+
+ Without these, every backup in GCS is permanently unrecoverable.
+
+ 1. Copy BOTH into your password manager (secure note).
+ 2. Optionally print them once for your fireproof safe.
+
+ Also saved to: $CRYPT_SECRET_FILE  (chmod 600 — delete it after saving.)
+
+ DO NOT share these values with anyone — including AI assistants.
+====================================================================
+EOF
 
 # ── 5. Install the systemd timer ──────────────────────────────────────────────
 say "Installing kinlight-backup systemd timer ..."
@@ -128,31 +155,4 @@ rclone ls crypt:
 say "Dry-run restore verification ..."
 "$SCRIPT_DIR/restore-db.sh" --verify
 
-# ── 7. Print the crypt passphrase (only if newly generated) ───────────────────
-if [[ "$NEW_PASS" -eq 1 ]]; then
-    mkdir -p "$HOME/.config/kinlight"
-    umask 077
-    printf 'Kinlight DB backup crypt passphrase (F110)\npassword : %s\nsalt     : %s\n' \
-        "$CRYPT_PASS" "$CRYPT_SALT" > "$CRYPT_SECRET_FILE"
-    cat <<EOF
-
-====================================================================
- SAVE THIS NOW — DB BACKUP ENCRYPTION PASSPHRASE
-====================================================================
- password : $CRYPT_PASS
- salt     : $CRYPT_SALT
-
- Without these, every backup in GCS is permanently unrecoverable.
-
- 1. Copy BOTH into your password manager (secure note).
- 2. Optionally print them once for your fireproof safe.
-
- Also saved to: $CRYPT_SECRET_FILE  (chmod 600 — delete it after saving.)
-
- DO NOT share these values with anyone — including AI assistants.
-====================================================================
-EOF
-fi
-
 say "Setup complete. Nightly backups run at 03:00 (systemd timer kinlight-backup)."
-warn "Re-running this script does NOT regenerate the passphrase (it lives in ~/.config/rclone/rclone.conf)."
