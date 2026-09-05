@@ -55,11 +55,21 @@ say "mongodump $(mongodump --version | head -1)"
 # ── 2. Configure rclone gcs: remote (VM service account) ──────────────────────
 remote_exists() { rclone listremotes 2>/dev/null | grep -qx "$1"; }
 
-# env_auth=true makes rclone use the VM's service account via the GCE metadata
-# server (no browser/OAuth). gcs: holds no secrets, so delete+recreate is safe.
+# rclone's `config create` runs an interactive browser OAuth flow for gcs even
+# when env_auth is set (it only affects runtime), so write the section directly
+# instead. env_auth=true makes rclone use the VM service account via the GCE
+# metadata server (no login). gcs: holds no secrets, so delete+recreate is safe.
 say "Configuring rclone remote gcs: (VM service account) ..."
 rclone config delete gcs >/dev/null 2>&1 || true
-rclone config create gcs "google cloud storage" env_auth=true location=us-west1
+RCLONE_CONF="$HOME/.config/rclone/rclone.conf"
+mkdir -p "$(dirname "$RCLONE_CONF")"
+cat >> "$RCLONE_CONF" <<'EOF'
+
+[gcs]
+type = google cloud storage
+env_auth = true
+location = us-west1
+EOF
 
 # ── 3. Check the GCS bucket is reachable ──────────────────────────────────────
 if ! rclone lsd "gcs:${BUCKET}" >/dev/null 2>&1; then
@@ -96,6 +106,7 @@ else
     say "rclone remote crypt: already exists (passphrase NOT regenerated)."
 fi
 rclone lsd crypt: >/dev/null || die "crypt: remote is broken — re-check rclone config."
+chmod 600 "$RCLONE_CONF"
 
 # ── 5. Install the systemd timer ──────────────────────────────────────────────
 say "Installing kinlight-backup systemd timer ..."
