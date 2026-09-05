@@ -1,0 +1,10 @@
+[Unit]
+Description=Kinlight MongoDB backup to GCS (F110)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Placeholders are replaced by setup-db-backup.sh at install time.
+User=__BACKUP_USER__
+ExecStart=__BACKUP_SCRIPT__

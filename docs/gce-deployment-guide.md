@@ -805,3 +805,63 @@ After rotation completes:
 > **Idempotent** — the script sets `encryptionKeyVersion` on each rotated document. Re-runs skip already-migrated data. Safe to run multiple times.
 >
 > **Atomic per document** — each vault and file is updated individually. No half-rotated state. If the script is interrupted, re-run it.
+
+---
+
+## Database backup & restore (F110)
+
+Atlas M0 (free tier) has **no automated backups**, so a nightly `mongodump` job on the GCE VM copies the whole `emergency_exit` DB to a private GCS bucket. The archive is **client-side encrypted** with rclone `crypt`, so GCS never sees plaintext (the DB still contains plaintext `users.email` + bcrypt hashes — F139 is deferred).
+
+```
+nightly 03:00 (systemd timer)
+  └─ backup-db.sh (deploy user)
+       ├─ MONGO_URI ← Secret Manager (curl + metadata server, VM SA)
+       ├─ mongodump --archive --gzip  (whole DB, incl. GridFS)
+       ├─ rclone copy → crypt:        (client-side AES → GCS)
+       └─ rclone delete --min-age 14d
+```
+
+### One-time setup (automated)
+
+A single `setup-db-backup.sh` script installs tools, configures rclone (`gcs:` + `crypt:`), generates the crypt passphrase, installs the timer, and runs a test backup + verify. Two things only you can do:
+
+**1. Create the GCS bucket + grant access** — paste this ONE command in GCP **Cloud Shell** (console.cloud.google.com → `>_` icon):
+
+```bash
+gcloud storage buckets create gs://kinlight-backups --location=us-west1 --uniform-bucket-level-access --project=moonlit-helper-426004-d2 && gcloud storage buckets add-iam-policy-binding gs://kinlight-backups --member="serviceAccount:$(gcloud projects describe moonlit-helper-426004-d2 --format='value(projectNumber)')-compute@developer.gserviceaccount.com" --role=roles/storage.objectAdmin --project=moonlit-helper-426004-d2
+```
+
+**2. Run the setup script** ☁️ on the VM:
+
+```bash
+bash ~/kinlight/identity-service/scripts/setup-db-backup.sh
+```
+
+The script installs `curl`/`jq`/`rclone` + `mongodb-database-tools`, configures both rclone remotes, installs the `kinlight-backup` timer, runs a test backup, and a `restore --verify`. At the end it **prints the crypt passphrase once** — copy it into your password manager (and optionally print it for the fireproof safe).
+
+> ⚠️ **The crypt passphrase is a second "must-not-lose" secret** — lose it and every GCS backup is unrecoverable. It is not re-generated on re-run (it lives obscured in `~/.config/rclone/rclone.conf`). Record it via the F109 procedure, alongside `VAULT_ENCRYPTION_KEY`.
+>
+> The script only depends on `curl`/`jq`/`rclone` (no `gcloud`); `MONGO_URI` is fetched straight from Secret Manager via the metadata server, so no secret ever touches the command line or shell history.
+
+### Verify
+
+The setup script already runs a backup + verify. To re-check any time:
+
+```bash
+~/kinlight/identity-service/scripts/backup-db.sh
+rclone ls crypt:                                        # should show kinlight-backup-<stamp>.archive.gz
+~/kinlight/identity-service/scripts/restore-db.sh --verify   # decrypt + mongorestore --dryRun
+```
+
+### Restore
+
+```bash
+# Restore the newest archive (prompts for confirmation; --yes skips):
+~/kinlight/identity-service/scripts/restore-db.sh --latest
+# Restore a specific local archive:
+~/kinlight/identity-service/scripts/restore-db.sh ~/kinlight/backups/kinlight-backup-<stamp>.archive.gz
+```
+
+The restore **drops and rewrites** every collection in `emergency_exit`. To recover onto a fresh cluster, also restore `VAULT_ENCRYPTION_KEY` from its F109 backup (the DB dump is useless without it — vault content/files are encrypted with it).
+
+Manual equivalent: `gcloud storage cp gs://kinlight-backups/...` pulls the raw (still-crypt-encrypted) object; you must `rclone copy crypt:<name> .` to decrypt, never `gcloud storage cp`.
