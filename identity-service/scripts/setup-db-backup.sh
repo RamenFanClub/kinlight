@@ -55,12 +55,11 @@ say "mongodump $(mongodump --version | head -1)"
 # ── 2. Configure rclone gcs: remote (VM service account) ──────────────────────
 remote_exists() { rclone listremotes 2>/dev/null | grep -qx "$1"; }
 
-if ! remote_exists 'gcs:'; then
-    say "Creating rclone remote gcs: (VM service account) ..."
-    rclone config create gcs "google cloud storage" location_constraint us-west1
-else
-    say "rclone remote gcs: already exists."
-fi
+# env_auth=true makes rclone use the VM's service account via the GCE metadata
+# server (no browser/OAuth). gcs: holds no secrets, so delete+recreate is safe.
+say "Configuring rclone remote gcs: (VM service account) ..."
+rclone config delete gcs >/dev/null 2>&1 || true
+rclone config create gcs "google cloud storage" env_auth=true location=us-west1
 
 # ── 3. Check the GCS bucket is reachable ──────────────────────────────────────
 if ! rclone lsd "gcs:${BUCKET}" >/dev/null 2>&1; then
