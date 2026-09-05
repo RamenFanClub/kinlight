@@ -40,7 +40,8 @@ def _api_key() -> str:
 def _call(method: str, **params) -> dict:
     data = {"api_key": _api_key(), "format": "json", **params}
     resp = requests.post(f"{API_BASE}/{method}", data=data, timeout=30)
-    resp.raise_for_status()
+    if not resp.ok:
+        raise SystemExit(f"ERROR: UptimeRobot {method} returned HTTP {resp.status_code}: {resp.text}")
     return resp.json()
 
 
