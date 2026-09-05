@@ -617,18 +617,11 @@ Also remove any Railway env vars from 🌐 GitHub Secrets if you stored them the
 
 The dead man's switch only fires if the VM is alive **and** the hourly pulse scanner is running. `GET /health` already covers both: it returns **HTTP 503** when the scanner hasn't run in `PULSE_SCAN_UNHEALTHY_AFTER_HOURS` (2 hours) or has never run, and a plain `200` when healthy. Point an external monitor at it so a silent failure pages you — this is the difference between "the app is down" and "the app is up but would never notify anyone".
 
-### Setup (UptimeRobot free tier, scripted)
+### Setup (UptimeRobot free tier)
 
-The monitor is created idempotently via the UptimeRobot v2 API — no UI click-through. You only need a **read-write API key** from *Integrations & API → API*, stored in Secret Manager as `kinlight-uptimerobot-api-key` (env `KINLIGHT_UPTIMEROBOT_API_KEY`).
+> **Free-plan caveat:** the UptimeRobot **free** tier blocks monitor *creation* via the v2 API — `newMonitor` returns `403 "You are not allowed to use some settings with your current plan"`. Reads (`getMonitors`, `getAccountDetails`) work fine. So the monitor is created/edited **manually in the dashboard** (below); the scripted path is kept only to *detect* an existing monitor idempotently.
 
-☁️ **On the VM** (secrets self-fetch from Secret Manager):
-
-```bash
-cd /app  # or identity-service/ locally
-python scripts/create_uptimerobot_monitor.py
-```
-
-The script creates (or detects) a monitor with these settings:
+🌐 **UptimeRobot dashboard** → Monitors → create (or edit an existing monitor) with:
 
 | Field | Value |
 |-------|-------|
@@ -636,7 +629,14 @@ The script creates (or detects) a monitor with these settings:
 | Friendly Name | `kinlight-api` |
 | URL / IP | `https://api.kinlight.app/health` |
 | Monitoring Interval | 300s (5 minutes — free-plan minimum) |
-| Alert Contact | account default email (auto-selected) |
+| Alert Contact | account default email (`anggita.bayu@gmail.com`) |
+
+An API key is only needed if you want the idempotent detect step (a **read-only** key from *Integrations & API → API*, stored in Secret Manager as `kinlight-uptimerobot-api-key` / env `KINLIGHT_UPTIMEROBOT_API_KEY`, is sufficient):
+
+```bash
+cd /app  # or identity-service/ locally
+python scripts/create_uptimerobot_monitor.py   # prints "already exists" if the monitor is present
+```
 
 UptimeRobot treats any non-`2xx` response as DOWN, so the F93 503 triggers an alert with **zero extra configuration** — the monitor alone covers: VM down, Docker crashed, nginx down, and "scanner silently stopped".
 

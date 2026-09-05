@@ -7,6 +7,12 @@ free-tier interval, wired to the account's default email alert contact. Any
 non-2xx response from `/health` (the F93 503 on a stale pulse scanner) is
 treated as DOWN by UptimeRobot, so a single failed check triggers the email.
 
+NOTE (free plan): UptimeRobot's free tier blocks monitor *creation* via the
+v2 API — `newMonitor` returns 403 "not allowed to use some settings with your
+current plan". Reads (`getMonitors`) work, so this script effectively only
+*detects* an existing monitor. Create/edit the monitor manually in the
+dashboard instead (see docs/gce-deployment-guide.md "Uptime monitoring").
+
 API key: read from KINLIGHT_UPTIMEROBOT_API_KEY (Secret Manager
 `kinlight-uptimerobot-api-key` when run on the VM — see _gcp_secrets.py).
 
@@ -46,10 +52,15 @@ def _call(method: str, **params) -> dict:
 
 
 def _find_monitor() -> dict:
-    """Return the existing `kinlight-api` monitor dict, or None."""
-    result = _call("getMonitors", search=MONITOR_NAME)
+    """Return the existing `/health` monitor dict, or None.
+
+    Matches on the URL (authoritative for F112) or the friendly name. The URL
+    comparison tolerates a trailing slash on the stored value.
+    """
+    result = _call("getMonitors")
     for monitor in result.get("monitors", []):
-        if monitor.get("friendly_name") == MONITOR_NAME or monitor.get("url") == MONITOR_URL:
+        url = (monitor.get("url") or "").rstrip("/")
+        if monitor.get("friendly_name") == MONITOR_NAME or url == MONITOR_URL.rstrip("/"):
             return monitor
     return None
 
