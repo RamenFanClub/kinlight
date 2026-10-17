@@ -2528,10 +2528,19 @@ def trusted_vault(ctx: dict = Depends(get_trusted_user)):
 @limiter.limit("5/minute")
 def trusted_resolve(request: Request, ctx: dict = Depends(get_trusted_user)):
     """F115: trusted person confirms they've checked on the holder — halts any
-    further kin notifications without mutating the vault or account."""
+    further kin notifications and resets the check-in timer so a fresh cycle
+    starts (mirrors /checkin)."""
+    now = now_utc()
     vaults_col.update_one(
         {"_id": ctx["vault"]["_id"]},
-        {"$set": {"trustedResolved": True, "updatedAt": now_utc()},
+        {"$set": {
+            "lastCheckin":               now,
+            "overdueNotificationSent":   False,
+            "reminderSent":              False,
+            "warningSentDays":           [],
+            "trustedResolved":           False,
+            "updatedAt":                 now,
+        },
          "$unset": {"trustedNotifiedAt": ""}},
     )
     invalidate_trusted_links(ctx["user"]["_id"])

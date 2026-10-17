@@ -3490,6 +3490,38 @@ class TestTrustedFieldsRoundTrip:
         assert blob["trustedEnabled"] is True
 
 
+class TestTrustedResolve:
+    """F115: resolving as a trusted person resets the check-in timer + cycle flags."""
+
+    def test_resolve_resets_timer_and_flags(self):
+        uid = "aaaaaaaaaaaaaaaaaaaaaaaa"
+        token = create_trusted_token(uid)
+        user = {"_id": ObjectId(uid), "email": "holder@x.com", "name": "Holder"}
+        vault = {"_id": ObjectId("bbbbbbbbbbbbbbbbbbbbbbbb"),
+                 "userId": ObjectId(uid), "trustedEnabled": True}
+        with patch("main.users_col") as mock_users, \
+             patch("main.vaults_col") as mock_vaults, \
+             patch("main.invalidate_trusted_links") as inv:
+            mock_users.find_one.return_value = user
+            mock_vaults.find_one.return_value = vault
+            mock_vaults.update_one.return_value = None
+            client = TestClient(main.app)
+            r = client.post("/trusted/resolve",
+                            headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 200
+        assert r.json() == {"ok": True, "resolved": True}
+        args = mock_vaults.update_one.call_args
+        assert args[0][0] == {"_id": vault["_id"]}
+        s = args[0][1]["$set"]
+        assert "lastCheckin" in s
+        assert s["overdueNotificationSent"] is False
+        assert s["reminderSent"] is False
+        assert s["warningSentDays"] == []
+        assert s["trustedResolved"] is False
+        assert args[0][1]["$unset"] == {"trustedNotifiedAt": ""}
+        inv.assert_called_once_with(ObjectId(uid))
+
+
 # ─── F117: NEW-DEVICE SIGN-IN ALERTS ─────────────────────────────────────────
 
 class TestNewDeviceAlert:
