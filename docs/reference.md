@@ -26,7 +26,7 @@ The `index.html` includes a login wall:
 - **API calls** point to `https://api.kinlight.app`
 - **Enter key** submits the login form
 - **Session persistence** — if token exists in sessionStorage, login wall is skipped
-- **Tester account:** tester_01 (only test account after F80 consolidation), password `Benny#07`
+- **Tester account:** tester_01 (only test account after F80 consolidation), password stored in the password manager (rotated — see F80/F145)
 - **Admin account:** `anggi` (F77) — separate from the tester pool, `isAdmin: true`, `isTester: false`. This is Anggi's personal/live account, used to build out a real vault and to access `/admin/*` endpoints. Has a unique password (no longer the shared test password).
 
 ### Key element IDs for login:
@@ -282,7 +282,7 @@ The backend is on Google Compute Engine free tier (`api.kinlight.app`) — an e2
 ### Key implementation notes
 - `bson` must NOT be in `requirements.txt` — pymongo bundles its own bson. Adding it separately causes an `ImportError: cannot import name 'SON'` crash.
 - `from bson import ObjectId` works because pymongo's bson is available after pymongo is installed.
-- Test inbox is hardcoded as `buat.nonton8282@gmail.com` — swap to `contact["email"]` when going live.
+- Test inbox is hardcoded (a shared test address) — swap to `contact["email"]` when going live.
 - Emails send from `onboarding@resend.dev` (Resend sandbox) — verify a custom domain before going live.
 - `overdueNotificationSent` flag in MongoDB prevents re-sending emails every hour for the same overdue event.
 - For `escalate` protocol, `overdueNotificationSent` is NOT set to True — scanner keeps running to notify new contacts each day.
@@ -403,7 +403,7 @@ _id, username, password (bcrypt hash), name, ageGroup, hasWill,
 notes, isTester, isAdmin, hasPasskey, tokenVersion, failedLoginCount,
 lockedUntil, createdAt, lastLogin
 ```
-**Tester account:** tester_01 (single remaining test account after F80). Password is a bcrypt hash of `Benny#07`. No `isAdmin` field (defaults to `false`).
+**Tester account:** tester_01 (single remaining test account after F80). Password is a bcrypt hash (rotated — see F80/F145). No `isAdmin` field (defaults to `false`).
 **Admin account:** `anggi` — `isTester: false`, `isAdmin: true`. Added F77. Has a unique password (no longer the shared test password).
 
 ### Additional collections (F115/F117/F118)

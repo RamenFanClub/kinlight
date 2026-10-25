@@ -402,7 +402,8 @@ def encrypt_content(content_dict: dict, user_id: Optional[str] = None) -> str:
     """
     cipher = _get_aesgcm()
     if cipher is None:
-        return content_dict  # type: ignore[return-value]
+        # Fail closed — never store vault content in plaintext (H2).
+        raise RuntimeError("VAULT_ENCRYPTION_KEY not set — cannot encrypt vault content.")
     plaintext = json.dumps(content_dict, separators=(",", ":")).encode("utf-8")
     nonce = os.urandom(12)
     aad = user_id.encode("utf-8") if user_id else None
@@ -845,6 +846,13 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     token = credentials.credentials
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"], options={"require": ["exp", "sub"]})
+        # F115: trusted-person scoped tokens (role:"trusted") are read-only and
+        # must never grant full account access. Reject them here — this guard
+        # closes a privilege escalation where a trusted JWT (no tokenVersion
+        # claim, so it defaulted to 0) matched holders who never changed their
+        # password.
+        if payload.get("role") == "trusted":
+            raise HTTPException(status_code=401, detail="Invalid token")
         user = _decrypt_user(users_col.find_one({"_id": ObjectId(payload["sub"])}))
         if not user:
             raise HTTPException(status_code=401, detail="User not found")

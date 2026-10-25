@@ -629,7 +629,7 @@ The dead man's switch only fires if the VM is alive **and** the hourly pulse sca
 | Friendly Name | `kinlight-api` |
 | URL / IP | `https://api.kinlight.app/health` |
 | Monitoring Interval | 300s (5 minutes — free-plan minimum) |
-| Alert Contact | account default email (`anggita.bayu@gmail.com`) |
+| Alert Contact | account default email (the admin's personal address) |
 
 An API key is only needed if you want the idempotent detect step (a **read-only** key from *Integrations & API → API*, stored in Secret Manager as `kinlight-uptimerobot-api-key` / env `KINLIGHT_UPTIMEROBOT_API_KEY`, is sufficient):
 

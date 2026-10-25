@@ -1705,6 +1705,12 @@ class TestEncryptContent:
         encrypted = encrypt_content(original)
         assert decrypt_content(encrypted) == original
 
+    def test_raise_without_key(self, monkeypatch):
+        """Fail closed (H2): never store plaintext vault content when no key is set."""
+        monkeypatch.setattr("main.VAULT_ENCRYPTION_KEY", "")
+        with pytest.raises(RuntimeError, match="VAULT_ENCRYPTION_KEY"):
+            encrypt_content({"assets": []})
+
 
 class TestDecryptContent:
     """Test the decrypt_content() helper — especially backward compatibility."""
@@ -3369,6 +3375,22 @@ class TestTrustedToken:
         tok = create_token("user123")
         payload = jwt.decode(tok, JWT_SECRET, algorithms=["HS256"])
         assert payload.get("role") != "trusted"
+
+    def test_trusted_token_rejected_by_get_current_user(self):
+        """C1: a trusted-person (role:trusted) token must never grant full access."""
+        from fastapi import HTTPException
+        from fastapi.security import HTTPAuthorizationCredentials
+        from main import get_current_user
+        uid = "aaaaaaaaaaaaaaaaaaaaaaaa"
+        trusted = create_trusted_token(uid)
+        user = {"_id": ObjectId(uid), "email": "h@x.com", "name": "Holder", "tokenVersion": 0}
+        creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=trusted)
+        with patch("main.users_col") as mock_users, \
+             patch("main._decrypt_user", side_effect=lambda u: u):
+            mock_users.find_one.return_value = user
+            with pytest.raises(HTTPException) as exc:
+                get_current_user(creds)
+        assert exc.value.status_code == 401
 
 
 class TestGetTrustedContact:
