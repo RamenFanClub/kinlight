@@ -1560,6 +1560,9 @@ def _handle_trusted_notification(vault_doc: dict, user: dict, trusted: dict,
       * resolved          → halt (trusted person already stopped notifications)
       * window expired    → auto-release: notify remaining kins once
     """
+    if vault_doc.get("trustedResolved", False):
+        return True  # halt — trusted person already stopped notifications
+
     notified_at = vault_doc.get("trustedNotifiedAt")
 
     if notified_at is None:
@@ -1573,9 +1576,6 @@ def _handle_trusted_notification(vault_doc: dict, user: dict, trusted: dict,
             )
             logger.info(f"F115: trusted person notified for {mask_email(user.get('email', str(user['_id'])))}")
         return True
-
-    if vault_doc.get("trustedResolved", False):
-        return True  # halt — trusted person already stopped notifications
 
     elapsed = now - ensure_utc(notified_at)
     if elapsed < timedelta(hours=TRUSTED_RESPONSE_HOURS):
@@ -2193,11 +2193,26 @@ def vault_sync(body: dict, current_user: dict = Depends(get_current_user)) -> di
     # F04: encrypt vault content before storage
     stored_content = encrypt_content(content, str(current_user["_id"]))
 
+    fields = extract_vault_fields(vault_blob)
+
+    # F115: lastCheckin is server-authoritative — the pulse scanner and
+    # /trusted/resolve depend on it. Never let a stale client blob regress it
+    # (e.g. a holder device still holding a pre-resolve timestamp would otherwise
+    # undo a trusted-person reset and re-trigger notifications on the next scan).
+    existing = vaults_col.find_one({"userId": current_user["_id"]})
+    if existing is not None:
+        current_last = existing.get("lastCheckin")
+        incoming_last = fields.get("lastCheckin")
+        if isinstance(current_last, datetime) and (
+            incoming_last is None or ensure_utc(incoming_last) <= ensure_utc(current_last)
+        ):
+            fields["lastCheckin"] = current_last
+
     vaults_col.update_one(
         {"userId": current_user["_id"]},
         {
             "$set": {
-                **extract_vault_fields(vault_blob),
+                **fields,
                 "content":   stored_content,
                 "syncedAt":  now,
                 "updatedAt": now,

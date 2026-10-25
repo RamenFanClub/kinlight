@@ -1584,6 +1584,48 @@ class TestVaultSyncLogEncryption:
         assert len(decrypted["log"]) == 20
 
 
+class TestVaultSyncLastCheckin:
+    """F115: vault_sync must not regress the server-authoritative lastCheckin."""
+
+    def test_stale_client_does_not_regress_lastcheckin(self):
+        from main import vault_sync
+        now = datetime.now(timezone.utc)
+        server_last = now - timedelta(days=1)
+        stale_ms = int((now - timedelta(days=60)).timestamp() * 1000)
+        body = {"vault": {"assets": [], "kin": [], "lastCheckin": stale_ms}}
+        with patch("main.vaults_col") as mock_vaults, patch("main.trusted_links_col", None):
+            mock_vaults.find_one.return_value = {"_id": "v1", "lastCheckin": server_last}
+            mock_vaults.update_one.return_value = None
+            vault_sync(body, {"_id": "test"})
+        s = mock_vaults.update_one.call_args[0][1]["$set"]
+        assert s["lastCheckin"] == server_last
+
+    def test_newer_client_updates_lastcheckin(self):
+        from main import vault_sync
+        now = datetime.now(timezone.utc)
+        server_last = now - timedelta(days=60)
+        fresh_ms = int((now - timedelta(days=1)).timestamp() * 1000)
+        body = {"vault": {"assets": [], "kin": [], "lastCheckin": fresh_ms}}
+        with patch("main.vaults_col") as mock_vaults, patch("main.trusted_links_col", None):
+            mock_vaults.find_one.return_value = {"_id": "v1", "lastCheckin": server_last}
+            mock_vaults.update_one.return_value = None
+            vault_sync(body, {"_id": "test"})
+        s = mock_vaults.update_one.call_args[0][1]["$set"]
+        assert s["lastCheckin"].timestamp() > server_last.timestamp()
+
+    def test_no_existing_vault_keeps_incoming(self):
+        from main import vault_sync
+        now = datetime.now(timezone.utc)
+        fresh_ms = int(now.timestamp() * 1000)
+        body = {"vault": {"assets": [], "kin": [], "lastCheckin": fresh_ms}}
+        with patch("main.vaults_col") as mock_vaults, patch("main.trusted_links_col", None):
+            mock_vaults.find_one.return_value = None
+            mock_vaults.update_one.return_value = None
+            vault_sync(body, {"_id": "test"})
+        s = mock_vaults.update_one.call_args[0][1]["$set"]
+        assert s["lastCheckin"] is not None
+
+
 # ─── F97: Stronger Password Policy ──────────────────────────────────────────
 
 class TestStrongerPasswordPolicy:
@@ -3452,6 +3494,20 @@ class TestTrustedNotificationGate:
         with patch("main.send_notification_email") as kin_send:
             handled = _handle_trusted_notification(vault, self._user(), self._trusted(), "Holder", now, 5)
         assert handled is True
+        kin_send.assert_not_called()
+
+    def test_resolved_without_notified_at_halts(self):
+        """Legacy state (pre-reset fix): trustedResolved=True but trustedNotifiedAt
+        already unset must still halt — do not re-send the magic link."""
+        now = datetime.now(timezone.utc)
+        vault = self._vault(trusted_notified_at=None, trusted_resolved=True)
+        with patch("main.generate_trusted_link") as gl, \
+             patch("main.send_trusted_email") as se, \
+             patch("main.send_notification_email") as kin_send:
+            handled = _handle_trusted_notification(vault, self._user(), self._trusted(), "Holder", now, 5)
+        assert handled is True
+        gl.assert_not_called()
+        se.assert_not_called()
         kin_send.assert_not_called()
 
     def test_window_expired_auto_releases_excluding_trusted(self):
