@@ -1557,6 +1557,17 @@ class TestVaultSyncLimits:
         if isinstance(exc_info.value, HTTPException):
             assert exc_info.value.status_code != 400
 
+    def test_oversized_vault_rejected(self):
+        """F96: an overall vault size cap bounds field lengths (M2)."""
+        from main import vault_sync, MAX_VAULT_BODY_BYTES
+        from fastapi import HTTPException
+        import pytest
+        big = "x" * (MAX_VAULT_BODY_BYTES + 1)
+        body = {"vault": {"assets": [], "kin": [], "will": {"notes": big}}}
+        with pytest.raises(HTTPException) as exc_info:
+            vault_sync(body, {"_id": "test"})
+        assert exc_info.value.status_code == 413
+
 
 class TestVaultSyncLogEncryption:
     """F131: the activity log is encrypted inside content, not stored plaintext."""
@@ -2056,6 +2067,18 @@ class TestPasswordResetRateLimit:
         assert statuses[:3] == [200, 200, 200]
         assert statuses[3] == 429
 
+    def test_per_recipient_cooldown_limits_email_bombing(self):
+        """F91 (M1): a per-recipient cooldown stops email bombing even if the
+        IP limiter is bypassed by spoofing X-Forwarded-For."""
+        import time as _time
+        from main import _reset_email_throttled, _reset_email_cooldown, RESET_EMAIL_COOLDOWN_SECONDS
+        _reset_email_cooldown.clear()
+        email = "victim@example.com"
+        assert _reset_email_throttled(email, _time.time()) is False   # first → allowed
+        assert _reset_email_throttled(email, _time.time()) is True    # repeat → throttled
+        # after the cooldown window elapses → allowed again
+        assert _reset_email_throttled(email, _time.time() + RESET_EMAIL_COOLDOWN_SECONDS + 1) is False
+
 
 class TestNominateRateLimit:
     """F91: /contact/nominate is limited to 10/minute per authenticated
@@ -2366,6 +2389,38 @@ class TestUpdateAccount:
 
 # ─── F101: PUSH NOTIFICATIONS ─────────────────────────────────────────────────
 
+class TestPushEndpointValidation:
+    """H3: push endpoint must be a public HTTPS URL (SSRF protection)."""
+
+    def test_accepts_public_https(self):
+        from main import _validate_push_endpoint
+        assert _validate_push_endpoint("https://push.example.com/abc") is True
+
+    def test_rejects_http(self):
+        from main import _validate_push_endpoint
+        assert _validate_push_endpoint("http://push.example.com/abc") is False
+
+    def test_rejects_loopback(self):
+        from main import _validate_push_endpoint
+        assert _validate_push_endpoint("https://127.0.0.1/abc") is False
+
+    def test_rejects_link_local_metadata(self):
+        from main import _validate_push_endpoint
+        assert _validate_push_endpoint("https://169.254.169.254/latest") is False
+
+    def test_rejects_private_ip(self):
+        from main import _validate_push_endpoint
+        assert _validate_push_endpoint("https://10.0.0.1/x") is False
+
+    def test_rejects_localhost(self):
+        from main import _validate_push_endpoint
+        assert _validate_push_endpoint("https://localhost/x") is False
+
+    def test_rejects_empty(self):
+        from main import _validate_push_endpoint
+        assert _validate_push_endpoint("") is False
+
+
 class TestPushNotifications:
     """Push notification endpoints: subscribe, unsubscribe, key retrieval."""
 
@@ -2398,6 +2453,16 @@ class TestPushNotifications:
             r = self._post("/push/subscribe", {"subscription": sub}, token)
         assert r.status_code == 200
         assert r.json()["ok"] is True
+
+    def test_subscribe_rejects_private_endpoint(self):
+        token = self._token()
+        sub = {"endpoint": "https://169.254.169.254/latest", "keys": {"p256dh": "key1", "auth": "key2"}}
+        user = {"_id": ObjectId("aaaaaaaaaaaaaaaaaaaaaaaa"), "username": "tester", "name": "Test"}
+        with patch("main.users_col") as mock_users, patch("main.push_subs_col") as mock_subs:
+            mock_users.find_one.return_value = user
+            mock_subs.find_one.return_value = None
+            r = self._post("/push/subscribe", {"subscription": sub}, token)
+        assert r.status_code == 400
 
     def test_subscribe_encrypts_subscription_at_rest(self):
         token = self._token()

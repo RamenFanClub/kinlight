@@ -10,13 +10,17 @@ import base64
 import hashlib
 import hmac
 import io
+import ipaddress
 import json
 import os
 import logging
 import re as re_mod
 import secrets
+import socket
 import threading
+import time
 import zipfile
+from urllib.parse import urlparse
 from xml.sax.saxutils import escape as xml_escape
 
 import bcrypt
@@ -275,6 +279,29 @@ WEBAUTHN_CHALLENGE_TTL_SECONDS = 300  # passkey ceremonies complete in seconds
 # challenge that lives only ~5 minutes. challenge_id -> {challenge, userId, exp}
 _webauthn_challenges: dict = {}
 _webauthn_challenges_lock = threading.Lock()
+
+# F91: per-recipient cooldown for password-reset emails (defense-in-depth
+# against X-Forwarded-For spoofing the IP limiter into email bombing).
+_reset_email_cooldown: dict = {}
+_reset_email_cooldown_lock = threading.Lock()
+RESET_EMAIL_COOLDOWN_SECONDS = 60
+
+
+def _reset_email_throttled(email: str, now_ts: float) -> bool:
+    """Return True if `email` is within the reset-email cooldown window.
+
+    Records the request timestamp on the first call within the window so a
+    repeat request for the same recipient is silently dropped (generic
+    response) before any email is sent."""
+    with _reset_email_cooldown_lock:
+        if now_ts - _reset_email_cooldown.get(email, 0.0) < RESET_EMAIL_COOLDOWN_SECONDS:
+            return True
+        _reset_email_cooldown[email] = now_ts
+        if len(_reset_email_cooldown) > 5000:
+            cutoff = now_ts - RESET_EMAIL_COOLDOWN_SECONDS
+            for k in [k for k, v in _reset_email_cooldown.items() if v < cutoff]:
+                del _reset_email_cooldown[k]
+    return False
 
 client = MongoClient(MONGO_URI) if MONGO_URI else None
 db = client["emergency_exit"] if client is not None else None
@@ -1517,6 +1544,45 @@ def generate_pdf_for_contact(contact: dict, vault_doc: dict, holder_name: str = 
 
 # ─── F101: PUSH NOTIFICATIONS ──────────────────────────────────────────────────
 
+def _is_private_host(host: str) -> bool:
+    """True if `host` is an IP literal or resolves to a private/internal address.
+
+    H3: blocks SSRF via the user-controlled push endpoint (metadata service,
+    loopback, RFC1918, link-local, etc.)."""
+    host = (host or "").strip().lower()
+    if not host:
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+        return (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_unspecified or ip.is_multicast)
+    except ValueError:
+        pass
+    if host == "localhost" or host.endswith(".local") or host.endswith(".internal"):
+        return True
+    try:
+        for info in socket.getaddrinfo(host, None):
+            ip = ipaddress.ip_address(info[4][0])
+            if (ip.is_private or ip.is_loopback or ip.is_link_local
+                    or ip.is_reserved or ip.is_unspecified):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _validate_push_endpoint(endpoint: str) -> bool:
+    """H3: only accept HTTPS public push-service endpoints."""
+    if not endpoint:
+        return False
+    try:
+        parsed = urlparse(endpoint)
+    except Exception:
+        return False
+    if parsed.scheme != "https":
+        return False
+    return not _is_private_host(parsed.hostname)
+
 def send_push_to_user(user_id, title: str, body: str, tag: str = "kinlight",
                       require_interaction: bool = False) -> int:
     """Send a push notification to all of a user's subscribed devices.
@@ -1887,6 +1953,12 @@ def request_reset(request: Request, body: dict):
     if not email:
         return generic
 
+    # F91: per-recipient cooldown. The IP limiter above can be sidestepped by
+    # spoofing X-Forwarded-For, so also throttle by recipient to prevent email
+    # bombing a specific address.
+    if _reset_email_throttled(email, time.time()):
+        return generic
+
     user = _decrypt_user(users_col.find_one({"email": email}))
     if user is None or not user.get("email"):
         return generic
@@ -2167,6 +2239,18 @@ def vault_sync(body: dict, current_user: dict = Depends(get_current_user)) -> di
         raise HTTPException(status_code=400, detail=f"Too many assets (max {MAX_VAULT_ASSETS}).")
     if not isinstance(contacts, list) or len(contacts) > MAX_VAULT_CONTACTS:
         raise HTTPException(status_code=400, detail=f"Too many contacts (max {MAX_VAULT_CONTACTS}).")
+
+    # F96: enforce an overall vault size cap — field counts alone don't bound
+    # individual string lengths, so a single oversized field could exhaust
+    # storage and the PDF/ZIP generation paths.
+    try:
+        if len(json.dumps(vault_blob)) > MAX_VAULT_BODY_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Vault too large. Maximum size is {MAX_VAULT_BODY_BYTES // 1024} KB.",
+            )
+    except TypeError:
+        pass  # non-serializable input — downstream validation rejects it
 
     now = now_utc()
 
@@ -2589,6 +2673,9 @@ def push_subscribe(payload: dict, current_user: dict = Depends(get_current_user)
     subscription = payload.get("subscription")
     if not subscription or not subscription.get("endpoint"):
         raise HTTPException(status_code=400, detail="Invalid subscription")
+    # H3: reject non-HTTPS or private/internal endpoints (SSRF protection).
+    if not _validate_push_endpoint(subscription["endpoint"]):
+        raise HTTPException(status_code=400, detail="Invalid push endpoint")
     user_id = current_user["_id"]
     endpoint_hash = _endpoint_blind_index(subscription["endpoint"])
     existing = push_subs_col.find_one({"userId": user_id, "endpointHash": endpoint_hash})
@@ -2817,16 +2904,26 @@ async def upload_file(
                     detail=f"File too large. Maximum size is {MAX_FILE_SIZE_BYTES // (1024*1024)} MB.",
                 )
         except ValueError:
-            pass  # non-integer Content-Length — let file.read() handle it
+            pass  # non-integer Content-Length — let the streamed read enforce it
 
-    file_data = await file.read()
+    # F104: stream the body in chunks so an omitted/understated Content-Length
+    # can't force an oversized upload to be fully buffered before rejection.
+    chunks = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_FILE_SIZE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Maximum size is {MAX_FILE_SIZE_BYTES // (1024*1024)} MB.",
+            )
+        chunks.append(chunk)
+    file_data = b"".join(chunks)
     if len(file_data) == 0:
         raise HTTPException(status_code=400, detail="Empty file")
-    if len(file_data) > MAX_FILE_SIZE_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large. Maximum size is {MAX_FILE_SIZE_BYTES // (1024*1024)} MB.",
-        )
 
     # F103: Validate magic bytes against claimed content type
     if not _validate_magic_bytes(file_data, content_type):
