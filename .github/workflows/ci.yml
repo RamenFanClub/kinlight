@@ -48,7 +48,7 @@ jobs:
           # Tests mock all external calls so these values are never used
           # but the imports expect them to exist
           MONGO_URI: mongodb://localhost:27017
-          JWT_SECRET: test-secret-key-for-ci
+          JWT_SECRET: test-jwt-secret-for-kinlight-32chars-min
           RESEND_API_KEY: re_test_fake_key_for_ci
           VAULT_ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
         run: |

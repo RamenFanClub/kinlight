@@ -1203,6 +1203,20 @@ class TestJwtSecretValidation:
         """A non-empty JWT_SECRET should let the module load normally."""
         assert JWT_SECRET and len(JWT_SECRET) > 0
 
+    def test_short_jwt_secret_raises(self):
+        """L1: a weak (< 32 char) JWT_SECRET must be rejected at startup."""
+        import importlib
+        import sys
+        with patch.dict(os.environ, {"JWT_SECRET": "too-short-secret"}):
+            saved = sys.modules.pop("main", None)
+            try:
+                with pytest.raises(RuntimeError, match="JWT_SECRET is too short"):
+                    importlib.import_module("main")
+            finally:
+                sys.modules.pop("main", None)
+                if saved:
+                    sys.modules["main"] = saved
+
 # ─── F86: ACCOUNT LOCKOUT ────────────────────────────────────────────────────
 
 class TestAccountLockout:
@@ -3633,6 +3647,30 @@ class TestTrustedFieldsRoundTrip:
         assert blob["trustedEnabled"] is True
 
 
+class TestTrustedUser:
+    """F115/L4: scoped trusted JWT validation."""
+
+    def _creds(self, token):
+        from fastapi.security import HTTPAuthorizationCredentials
+        return HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+
+    def test_missing_trusted_contact_rejected(self):
+        uid = "aaaaaaaaaaaaaaaaaaaaaaaa"
+        token = create_trusted_token(uid)
+        user = {"_id": ObjectId(uid), "email": "h@x.com", "name": "Holder"}
+        vault = {"_id": ObjectId("bbbbbbbbbbbbbbbbbbbbbbbb"),
+                 "userId": ObjectId(uid), "trustedEnabled": True,
+                 "content": {"kin": []}}
+        from main import get_trusted_user
+        from fastapi import HTTPException
+        with patch("main.users_col") as mock_users, patch("main.vaults_col") as mock_vaults:
+            mock_users.find_one.return_value = user
+            mock_vaults.find_one.return_value = vault
+            with pytest.raises(HTTPException) as exc:
+                get_trusted_user(self._creds(token))
+        assert exc.value.status_code == 403
+
+
 class TestTrustedResolve:
     """F115: resolving as a trusted person resets the check-in timer + cycle flags."""
 
@@ -3641,7 +3679,8 @@ class TestTrustedResolve:
         token = create_trusted_token(uid)
         user = {"_id": ObjectId(uid), "email": "holder@x.com", "name": "Holder"}
         vault = {"_id": ObjectId("bbbbbbbbbbbbbbbbbbbbbbbb"),
-                 "userId": ObjectId(uid), "trustedEnabled": True}
+                 "userId": ObjectId(uid), "trustedEnabled": True,
+                 "content": {"kin": [{"isTrusted": True, "first": "T", "email": "t@x.com"}]}}
         with patch("main.users_col") as mock_users, \
              patch("main.vaults_col") as mock_vaults, \
              patch("main.invalidate_trusted_links") as inv:

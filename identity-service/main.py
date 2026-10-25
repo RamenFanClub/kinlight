@@ -254,6 +254,12 @@ if not JWT_SECRET:
         "JWT_SECRET is not set. Set it in GCP Secret Manager (kinlight-jwt-secret) "
         "or as an env var before starting the server."
     )
+# L1: reject weak signing keys (HS256 needs a long, high-entropy secret).
+if len(JWT_SECRET) < 32:
+    raise RuntimeError(
+        "JWT_SECRET is too short — use at least 32 characters of high-entropy "
+        "randomness (e.g. `openssl rand -hex 32`)."
+    )
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 # F04: Application-level encryption key for vault content (AES-256-GCM).
 # 64-char hex string → 32 bytes. Set in Railway env vars, never in code.
@@ -731,6 +737,10 @@ def get_trusted_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         # designated trusted contact must still exist on the vault.
         if not vault_doc.get("trustedEnabled", False):
             raise HTTPException(status_code=403, detail="Trusted access is disabled")
+        # L4: the trusted contact must still be designated in the vault's kin —
+        # a redeemed token should not survive the contact being removed.
+        if get_trusted_contact(vault_doc) is None:
+            raise HTTPException(status_code=403, detail="Trusted contact no longer designated")
         return {"user": user, "vault": vault_doc}
     except HTTPException:
         raise
@@ -1100,7 +1110,7 @@ def _send_email(to: str, subject: str, body: str, attachments: Optional[list] = 
         response.raise_for_status()
         return True
     except Exception as e:
-        logger.error(f"Email send failed to {to}: {e}")
+        logger.error(f"Email send failed to {mask_email(to)}: {type(e).__name__}")
         return False
 
 
@@ -1321,7 +1331,7 @@ The Kinlight team
     file_count = len(attachments) - 1
     sent = _send_email(email, f"Important: Kinlight package from {holder_name}", body, attachments)
     if sent:
-        logger.info(f"Notification sent to {first} at {email} ({file_count} file attachment{'s' if file_count != 1 else ''})")
+        logger.info(f"Notification sent to {first} at {mask_email(email)} ({file_count} file attachment{'s' if file_count != 1 else ''})")
     return sent
 
 
@@ -1342,7 +1352,7 @@ The Kinlight team
 """
     sent = _send_email(email, f"All clear — {holder_name} is okay", body)
     if sent:
-        logger.info(f"All-clear sent to {first} at {email}")
+        logger.info(f"All-clear sent to {first} at {mask_email(email)}")
     return sent
 
 
@@ -1371,7 +1381,7 @@ You received this because {holder_name} listed you as a trusted contact.
         body,
     )
     if sent:
-        logger.info(f"F63: Nomination email sent to {contact_first} at {contact_email}")
+        logger.info(f"F63: Nomination email sent to {contact_first} at {mask_email(contact_email)}")
     return sent
 
 
@@ -2945,7 +2955,7 @@ async def upload_file(
         },
     )
 
-    logger.info(f"File uploaded — user={str(current_user['_id'])} file_id={file_id} name={mask_email(filename)}")
+    logger.info(f"File uploaded — user={str(current_user['_id'])} file_id={file_id}")
     return {"ok": True, "file_id": file_id, "filename": filename, "content_type": content_type}
 
 
