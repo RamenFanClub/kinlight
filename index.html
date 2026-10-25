@@ -1038,25 +1038,31 @@ async function doReset(){
   }catch(e){errEl.textContent='Connection error — please try again.';errEl.classList.add('on');}
 }
 
-document.addEventListener('DOMContentLoaded',async ()=>{
-  ['li-user','li-pass'].forEach(id=>{
-    $(id).addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();});
-  });
-  // F115: arriving via a trusted-person magic link — redeem it, show read-only view
-  const qsTrusted=new URLSearchParams(location.search).get('trusted');
+async function handleMagicLink(){
+  // F115/F66: trusted + reset tokens arrive in the URL fragment (#...) so they
+  // never leak via Referer/access logs (L3). Returns true when it handled one.
+  const hash=location.hash.replace(/^#/,'');
+  const qsTrusted=new URLSearchParams(hash).get('trusted');
   if(qsTrusted){
     history.replaceState(null,'',location.pathname);
     await openTrustedView(qsTrusted);
-    return;
+    return true;
   }
-  // F66: arriving via a reset link — capture token, scrub it from the URL, show reset form
-  const qsToken=new URLSearchParams(location.search).get('reset');
+  const qsToken=new URLSearchParams(hash).get('reset');
   if(qsToken){
     resetToken=qsToken;
     history.replaceState(null,'',location.pathname);
     showLoginView('reset');
-    return;
+    return true;
   }
+  return false;
+}
+
+document.addEventListener('DOMContentLoaded',async ()=>{
+  ['li-user','li-pass'].forEach(id=>{
+    $(id).addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();});
+  });
+  if(await handleMagicLink())return;
   // F67: arriving via reminder email checkin link — store intent, scrub URL
   const qsAction=new URLSearchParams(location.search).get('action');
   if(qsAction==='checkin'){
@@ -1067,6 +1073,10 @@ document.addEventListener('DOMContentLoaded',async ()=>{
   const user=sessionStorage.getItem('ee_user');
   if(token&&user){await showApp(JSON.parse(user));}
 });
+
+// L3: handle the token if the hash changes on an already-open app (the browser
+// may reuse the same tab for a magic link, which only changes the fragment).
+window.addEventListener('hashchange',()=>{handleMagicLink();});
 
 // ─── F100: OFFLINE-AWARE SYNC ─────────────────────────────────────────────────
 window.addEventListener('online',()=>{
@@ -1328,7 +1338,7 @@ async function openTrustedView(rawToken){
       '<p style="font-size:13px;color:var(--ov);line-height:1.5;">'+esc(msg)+'</p></div>';
   };
   try{
-    const res=await fetch(API+'/trusted/access?token='+encodeURIComponent(rawToken));
+    const res=await fetch(API+'/trusted/access',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:rawToken})});
     if(!res.ok){const d=await res.json().catch(()=>({}));showError(d.detail||'This link is invalid or has expired.');return;}
     const data=await res.json();
     sessionStorage.setItem('ee_trusted_token',data.token);

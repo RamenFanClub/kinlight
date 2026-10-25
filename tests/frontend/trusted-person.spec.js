@@ -81,7 +81,7 @@ test.describe('Trusted person — read-only view', () => {
     await page.goto('/');
     await page.evaluate(() => { localStorage.clear(); sessionStorage.clear(); });
 
-    await page.route(`${API_BASE}/trusted/access?token=magic`, async (route) => {
+    await page.route(`${API_BASE}/trusted/access`, async (route) => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, token: 'scoped-jwt', holderName }) });
     });
     await page.route(`${API_BASE}/trusted/vault`, async (route) => {
@@ -91,7 +91,7 @@ test.describe('Trusted person — read-only view', () => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"resolved":true}' });
     });
 
-    await page.goto('/?trusted=magic');
+    await page.goto('/#trusted=magic');
 
     await expect(page.locator('#trusted-view')).toBeVisible();
     await expect(page.locator('#tv-body')).toContainText('hasn\u2019t checked in');
@@ -106,11 +106,11 @@ test.describe('Trusted person — read-only view', () => {
     await page.goto('/');
     await page.evaluate(() => { localStorage.clear(); sessionStorage.clear(); });
 
-    await page.route(`${API_BASE}/trusted/access?token=bad`, async (route) => {
+    await page.route(`${API_BASE}/trusted/access`, async (route) => {
       await route.fulfill({ status: 400, contentType: 'application/json', body: '{"detail":"This link is invalid or has already been used."}' });
     });
 
-    await page.goto('/?trusted=bad');
+    await page.goto('/#trusted=bad');
     await expect(page.locator('#tv-body')).toContainText('This link isn\u2019t available');
   });
 });

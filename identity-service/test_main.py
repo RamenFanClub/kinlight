@@ -912,7 +912,7 @@ class TestPasswordReset:
             send_reset_email(user, "tok123")
 
         payload = mock_post.call_args[1]["json"]
-        assert "?reset=tok123" in payload["text"]
+        assert "#reset=tok123" in payload["text"]
         assert payload["to"] == ["sandra@example.com"]
 
     def test_reset_email_mentions_ignore_if_not_requested(self):
@@ -3702,6 +3702,42 @@ class TestTrustedResolve:
         assert s["trustedResolved"] is False
         assert args[0][1]["$unset"] == {"trustedNotifiedAt": ""}
         inv.assert_called_once_with(ObjectId(uid))
+
+
+class TestTrustedAccess:
+    """F115/L3: /trusted/access redeems a magic link via POST body."""
+
+    def test_redeems_link_via_post_body(self):
+        uid = "aaaaaaaaaaaaaaaaaaaaaaaa"
+        token = "raw-token"
+        link_doc = {"_id": ObjectId("cccccccccccccccccccccccc"),
+                    "userId": ObjectId(uid),
+                    "tokenHash": hash_reset_token(token),
+                    "used": False,
+                    "expiresAt": datetime.now(timezone.utc) + timedelta(hours=1)}
+        user = {"_id": ObjectId(uid), "email": "h@x.com", "name": "Holder"}
+        vault = {"_id": ObjectId("bbbbbbbbbbbbbbbbbbbbbbbb"),
+                 "userId": ObjectId(uid), "trustedEnabled": True}
+        with patch("main.trusted_links_col") as mock_links, \
+             patch("main.users_col") as mock_users, \
+             patch("main.vaults_col") as mock_vaults:
+            mock_links.find_one.return_value = link_doc
+            mock_links.update_one.return_value = None
+            mock_users.find_one.return_value = user
+            mock_vaults.find_one.return_value = vault
+            client = TestClient(main.app)
+            r = client.post("/trusted/access", json={"token": token})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["ok"] is True
+        assert data["holderName"] == "Holder"
+        assert "token" in data
+        mock_links.update_one.assert_called()
+
+    def test_missing_token_rejected(self):
+        client = TestClient(main.app)
+        r = client.post("/trusted/access", json={})
+        assert r.status_code == 400
 
 
 # ─── F117: NEW-DEVICE SIGN-IN ALERTS ─────────────────────────────────────────

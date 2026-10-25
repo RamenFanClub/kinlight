@@ -1390,7 +1390,7 @@ def send_trusted_email(contact: dict, holder_name: str, token: str) -> bool:
     first = contact.get("first", "")
     email = contact.get("email", "")
     hours = int(TRUSTED_RESPONSE_HOURS)
-    link = f"{APP_URL}?trusted={token}"
+    link = f"{APP_URL}#trusted={token}"
     body = f"""Dear {first},
 
 {holder_name} has not confirmed their check-in within the required period.
@@ -1417,7 +1417,7 @@ The Kinlight team
 def send_reset_email(user: dict, token: str) -> bool:
     """F66: email a single-use password reset link to the account holder."""
     first = (user.get("name") or "there").split(" ")[0]
-    link = f"{APP_URL}?reset={token}"
+    link = f"{APP_URL}#reset={token}"
     body = (
         f"Hi {first},\n\n"
         f"We received a request to reset your Kinlight password.\n\n"
@@ -2606,13 +2606,17 @@ def trusted_send_link(request: Request, current_user: dict = Depends(get_current
     if not send_trusted_email(trusted, holder_name, token):
         raise HTTPException(status_code=500, detail="Failed to send trusted email. Check server logs.")
     logger.info(f"F115: manual trusted link sent for {mask_email(current_user.get('email',''))}")
-    return {"ok": True, "link": f"{APP_URL}?trusted={token}"}
+    return {"ok": True, "link": f"{APP_URL}#trusted={token}"}
 
 
-@app.get("/trusted/access")
+@app.post("/trusted/access")
 @limiter.limit("10/minute")
-def trusted_access(request: Request, token: str = ""):
-    """F115: redeem a single-use magic link, returning a scoped read-only JWT."""
+def trusted_access(request: Request, body: dict):
+    """F115: redeem a single-use magic link, returning a scoped read-only JWT.
+
+    L3: the raw token is accepted in the POST body (not the URL query string)
+    so it never lands in server/proxy access logs."""
+    token = (body or {}).get("token", "") if isinstance(body, dict) else ""
     if not token:
         raise HTTPException(status_code=400, detail="Missing token")
     link_doc = trusted_links_col.find_one({"tokenHash": hash_reset_token(token)}) if trusted_links_col is not None else None
